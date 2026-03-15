@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "deny": {
+      "Write": ["*.env", ".env.*", "*.key", "*.pem", "*.secret"],
+      "Edit": ["*.env", ".env.*", "*.key", "*.pem", ".git/*"],
+      "Read": [".env", ".env.*"]
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$(date): $TOOL_NAME\" >> .claude/audit.log"
+          }
+        ]
+      }
+    ]
+  }
+}
