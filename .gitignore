@@ -1,5 +1,7 @@
 /target
 .claude/worktrees
+.claude/audit.log
+.claude/memory/
 .env
 *.env.*
 *.key
