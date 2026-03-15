@@ -1,0 +1,117 @@
+[config]
+default_to_workspace = false
+
+# ─── Core Build ────────────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build all workspace crates (debug)"
+command = "cargo"
+args = ["build", "--workspace"]
+
+[tasks.build-release]
+description = "Build all workspace crates (release)"
+command = "cargo"
+args = ["build", "--workspace", "--release"]
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+
+[tasks.test]
+description = "Run all workspace tests (nextest)"
+command = "cargo"
+args = ["nextest", "run", "--workspace"]
+install_crate = "cargo-nextest"
+
+[tasks.test-cargo]
+description = "Run all workspace tests (standard cargo test, for doc tests)"
+command = "cargo"
+args = ["test", "--workspace"]
+
+# ─── Linting & Formatting ──────────────────────────────────────────────────────
+
+[tasks.lint]
+description = "Run clippy with pedantic warnings across all crates"
+command = "cargo"
+args = ["clippy", "--workspace", "--", "-W", "clippy::pedantic"]
+
+[tasks.fmt]
+description = "Check formatting across all crates"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.fmt-fix]
+description = "Apply formatting across all crates"
+command = "cargo"
+args = ["fmt", "--all"]
+
+# ─── Coverage ──────────────────────────────────────────────────────────────────
+
+[tasks.coverage]
+description = "Generate LLVM coverage report (terminal summary)"
+command = "cargo"
+args = ["llvm-cov", "--workspace"]
+install_crate = "cargo-llvm-cov"
+
+[tasks.coverage-html]
+description = "Generate LLVM coverage report (HTML, opens browser)"
+script = [
+    "cargo llvm-cov --workspace --html",
+    "open target/llvm-cov/html/index.html"
+]
+
+[tasks.coverage-ci]
+description = "Coverage check — fails if below 99% (used in CI)"
+command = "cargo"
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "99"]
+
+# ─── Benchmarks ────────────────────────────────────────────────────────────────
+
+[tasks.benchmark]
+description = "Run Criterion benchmarks across all crates"
+command = "cargo"
+args = ["bench", "--workspace"]
+
+# ─── Instrumentation ───────────────────────────────────────────────────────────
+
+[tasks.instruments]
+description = "Profile a binary with cargo-instruments (macOS only). Usage: cargo make instruments --bin rayplay-cli -- --template time"
+command = "cargo"
+args = ["instruments", "--workspace"]
+install_crate = "cargo-instruments"
+
+[tasks.instruments-time]
+description = "Time Profiler on rayplay-cli (macOS only)"
+command = "cargo"
+args = ["instruments", "-t", "Time Profiler", "--bin", "rayplay-cli"]
+
+[tasks.instruments-alloc]
+description = "Allocations Profiler on rayplay-cli (macOS only)"
+command = "cargo"
+args = ["instruments", "-t", "Allocations", "--bin", "rayplay-cli"]
+
+# ─── Composite Gates ───────────────────────────────────────────────────────────
+
+[tasks.lint-test-coverage]
+description = "Run lint + tests + coverage in sequence (local quality gate)"
+dependencies = ["lint", "test", "coverage-ci"]
+
+[tasks.ci]
+description = "Full CI pipeline: fmt + lint + test + coverage"
+dependencies = ["fmt", "lint", "test", "coverage-ci"]
+
+# ─── Utility ───────────────────────────────────────────────────────────────────
+
+[tasks.clean]
+description = "Clean all build artifacts"
+command = "cargo"
+args = ["clean"]
+
+[tasks.doc]
+description = "Build and open rustdoc for all crates"
+script = [
+    "cargo doc --workspace --no-deps --open"
+]
+
+[tasks.check]
+description = "Fast type-check without producing binaries"
+command = "cargo"
+args = ["check", "--workspace"]
