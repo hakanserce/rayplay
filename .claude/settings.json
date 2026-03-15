@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"$(date): $TOOL_NAME\" >> .claude/audit.log",
+            "command": "jq -r '"[\(.timestamp // now | todate)] \(.tool_name // "unknown") \(.tool_input.command // .tool_input.file_path // "")"' >> .claude/audit.log",
             "async": true
           }
         ]
