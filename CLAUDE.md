@@ -110,7 +110,7 @@ before committing.
 ### Branching
 - main is protected — all changes go through PRs
 - Use worktrees for parallel agent work: claude -w feat-<feature-name>
-- One UC = one branch = one PR
+- One UC = one branch = one PR = one GitHub Issue
 
 ### Commit Messages
 Use conventional commit format:
@@ -123,15 +123,17 @@ Use conventional commit format:
 ### PR Description Template
 Every PR must include:
 - UC ID and title
+- GitHub Issue reference: `Closes #<issue-number>`
 - Summary of changes
 - How to test
 - Quality gate checklist: fmt ✓, clippy ✓, tests ✓, coverage ✓
 
 ### PR Review Flow
-1. Developer Agent creates PR via gh pr create
-2. GitHub Actions CI runs quality gates automatically
-3. Claude Code Action posts automated review
-4. Human approves and merges
+1. Developer Agent updates GitHub Issue to `status:in-progress`
+2. Developer Agent creates PR via gh pr create with `Closes #<issue>` in body
+3. GitHub Actions CI runs quality gates automatically
+4. Claude Code Action posts automated review
+5. Human approves and merges — GitHub auto-closes the linked issue
 
 ## Use Case (UC) Documents
 
@@ -144,6 +146,46 @@ All features are tracked as Use Cases in docs/uc/. Each UC follows this template
 - **Dependencies:** Other UCs or components required
 - **Estimated Complexity:** S / M / L
 - **Priority:** P0 (critical path) / P1 (important) / P2 (nice-to-have)
+
+## GitHub Issues — Task Tracking
+
+GitHub Issues is the source of truth for UC and task status. Every UC gets
+a corresponding GitHub Issue. Agents update issues as part of their workflow.
+
+### Issue Structure
+- Each UC has a GitHub Issue titled: "UC-XXX: <title>"
+- Labels for priority: `P0`, `P1`, `P2`
+- Labels for status: `status:todo`, `status:in-progress`, `status:in-review`, `status:done`
+- Labels for agent: `agent:developer`, `agent:senior-dev`, `agent:qa`
+- Assign the issue to the agent working on it (use comments for agent handoffs)
+
+### Agent Workflow with Issues
+- **Before starting a UC:** Update the issue label to `status:in-progress`
+      gh issue edit <number> --remove-label "status:todo" --add-label "status:in-progress"
+- **When creating a PR:** Reference the issue in the PR body with `Closes #<number>`
+      gh pr create --title "UC-XXX: title" --body "Closes #<number>\n\n..."
+- **When PR is merged:** GitHub auto-closes the issue via the `Closes #` keyword
+- **When blocked:** Add a comment to the issue explaining the blocker and add label `blocked`
+      gh issue comment <number> --body "Blocked: reason"
+      gh issue edit <number> --add-label "blocked"
+
+### Issue Commands Reference
+    gh issue list                              # List all open issues
+    gh issue list --label "P0"                 # Filter by priority
+    gh issue list --label "status:in-progress" # Filter by status
+    gh issue create --title "UC-XXX: title" --label "P1,status:todo" --body "..."  # Create
+    gh issue edit <number> --add-label "status:in-progress"  # Update status
+    gh issue comment <number> --body "Status update: ..."    # Add progress note
+    gh issue close <number>                    # Close when done
+
+### Creating Issues for New UCs
+When defining a new UC (via Product Manager Agent), always:
+1. Write the UC document to docs/uc/UC-XXX.md
+2. Create a matching GitHub Issue:
+      gh issue create \
+        --title "UC-XXX: <title>" \
+        --label "<priority>,status:todo" \
+        --body "UC document: docs/uc/UC-XXX.md\n\n<acceptance criteria summary>"
 
 ## Architecture Decision Records (ADRs)
 
