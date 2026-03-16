@@ -103,12 +103,10 @@ impl QuicVideoTransport {
     /// # Errors
     ///
     /// Returns [`TransportError`] if TLS generation or socket binding fails.
-    pub fn listen(
-        bind_addr: SocketAddr,
-    ) -> Result<(QuicListener, CertificateDer<'static>), TransportError> {
+    pub fn listen(bind_addr: SocketAddr) -> Result<(QuicListener, Vec<u8>), TransportError> {
         let (cert_der, server_config) = make_server_config()?; // coverage:excl-line: rcgen cert generation failure is not reproducible in tests
         let endpoint = Endpoint::server(server_config, bind_addr)?; // coverage:excl-line: socket bind failure requires an OS-level error
-        Ok((QuicListener { endpoint }, cert_der))
+        Ok((QuicListener { endpoint }, cert_der.as_ref().to_vec()))
     }
 
     /// Creates a client-side transport connecting to `server_addr`.
@@ -128,9 +126,9 @@ impl QuicVideoTransport {
     /// [`listen`]: QuicVideoTransport::listen
     pub async fn connect(
         server_addr: SocketAddr,
-        server_cert: CertificateDer<'static>,
+        server_cert: Vec<u8>,
     ) -> Result<Self, TransportError> {
-        let client_config = make_client_config(server_cert)?;
+        let client_config = make_client_config(CertificateDer::from(server_cert))?;
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("valid wildcard address");
         let mut endpoint = Endpoint::client(bind_addr)?; // coverage:excl-line: socket bind failure requires an OS-level error
         endpoint.set_default_client_config(client_config);
@@ -438,8 +436,7 @@ mod tests {
         let (listener, _real_cert) = QuicVideoTransport::listen(bind).unwrap();
         let server_addr = listener.local_addr().unwrap();
         let _server = tokio::spawn(async move { listener.accept().await });
-        let bad_cert = CertificateDer::from(vec![0u8; 16]);
-        let result = QuicVideoTransport::connect(server_addr, bad_cert).await;
+        let result = QuicVideoTransport::connect(server_addr, vec![0u8; 16]).await;
         assert!(result.is_err());
     }
 

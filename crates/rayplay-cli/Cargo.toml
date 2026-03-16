@@ -4,17 +4,23 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name    = "rayhost"
-path    = "src/main.rs"
+name = "rayhost"
+path = "src/main.rs"
+
+[[bin]]
+name = "rayview"
+path = "src/client_main.rs"
 
 [dependencies]
-anyhow.workspace            = true
-clap                        = { workspace = true, features = ["derive"] }
-tokio.workspace             = true
-tracing.workspace           = true
+anyhow.workspace             = true
+clap                         = { workspace = true, features = ["derive"] }
+crossbeam-channel.workspace  = true
+tokio.workspace              = true
+tracing.workspace            = true
 tracing-subscriber.workspace = true
-rayplay-network             = { path = "../rayplay-network" }
-rayplay-video               = { path = "../rayplay-video" }
+rayplay-network              = { path = "../rayplay-network" }
+rayplay-video                = { path = "../rayplay-video" }
 
 [dev-dependencies]
 criterion.workspace = true
+tempfile            = "3"
