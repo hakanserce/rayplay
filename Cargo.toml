@@ -15,6 +15,10 @@ tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion   = { version = "0.8", features = ["html_reports"] }
 clap        = { version = "4", features = ["derive"] }
+winit             = "0.30"
+wgpu              = "22"
+crossbeam-channel = "0.5"
+pollster          = "0.3"
 
 [profile.dev]
 opt-level = 0

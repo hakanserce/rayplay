@@ -61,7 +61,17 @@ script = [
 [tasks.coverage-ci]
 description = "Coverage check — fails if below 99% (used in CI)"
 command = "cargo"
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs"]
+# Excluded files:
+#   main.rs          — binary entry point with no testable logic.
+#   render_window.rs — winit event-loop glue; ActiveEventLoop and Window
+#     cannot be constructed outside the event loop, making the
+#     ApplicationHandler callbacks untestable as unit tests.  All extractable
+#     business logic is tested via AppState helper methods (see module doc).
+#   wgpu_surface.rs  — WgpuRenderer::new() requires a live wgpu::Surface
+#     backed by a real OS window (create_surface, adapter selection with
+#     compatible_surface, swap-chain configure).  Covered under hw-render-tests
+#     on hardware CI runners.  See the module doc for details.
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs"]
 
 # ─── Benchmarks ────────────────────────────────────────────────────────────────
 
