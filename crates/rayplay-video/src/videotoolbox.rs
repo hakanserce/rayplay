@@ -526,7 +526,7 @@ mod macos {
         /// `IOSurface` interop: call `new_hardware` and hand the surface handle to
         /// the wgpu renderer as an external texture, bypassing the CPU entirely.
         ///
-        /// TODO(UC-005): replace with `DecodedFrame::new_hardware` + `IOSurface`
+        /// TODO(#40): replace with `DecodedFrame::new_hardware` + `IOSurface`
         /// handle so the renderer can import the surface directly (ADR-005).
         ///
         /// Only available with `--features hw-codec-tests`.
