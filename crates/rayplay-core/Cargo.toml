@@ -8,7 +8,7 @@ thiserror.workspace = true
 tokio.workspace     = true
 tracing.workspace   = true
 serde.workspace     = true
+rayplay-video       = { path = "../rayplay-video" }
 
 [dev-dependencies]
 criterion.workspace = true
-

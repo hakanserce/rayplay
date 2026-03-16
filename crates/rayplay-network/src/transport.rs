@@ -1,0 +1,441 @@
+//! QUIC-based video transport using RFC 9221 unreliable datagrams (ADR-003).
+//!
+//! # Two-phase server lifecycle
+//!
+//! The server lifecycle is split so the caller can share the certificate with
+//! the client **before** blocking on an incoming connection:
+//!
+//! ```ignore
+//! // Host side
+//! let (listener, cert_der) = QuicVideoTransport::listen("0.0.0.0:5000".parse()?)?;
+//! // … distribute cert_der to the client (PIN pairing, QR code, etc.) …
+//! let mut host = listener.accept().await?;
+//!
+//! // Client side
+//! let mut client = QuicVideoTransport::connect(server_addr, cert_der).await?;
+//! ```
+//!
+//! # Self-signed TLS
+//!
+//! A self-signed certificate is generated via `rcgen` for development and
+//! testing. ADR-007 will replace this with a SPAKE2 pairing flow.
+
+use std::{net::SocketAddr, sync::Arc};
+
+use quinn::{
+    ClientConfig, Connection, Endpoint, ServerConfig,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
+};
+use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+use rayplay_video::packet::EncodedPacket;
+
+use crate::{
+    fragmenter::VideoFragmenter,
+    reassembler::{MAX_IN_FLIGHT_FRAMES, VideoReassembler},
+    wire::{TransportError, VideoFragment},
+};
+
+/// Datagram receive-buffer size in bytes (64 KiB).
+///
+/// Configuring a non-`None` value on a `TransportConfig` enables RFC 9221
+/// unreliable datagram support for that endpoint.
+pub const MAX_DATAGRAM_BUFFER: usize = 64 * 1024;
+
+// ── QuicListener ─────────────────────────────────────────────────────────────
+
+/// A bound QUIC server endpoint that can accept one incoming connection.
+///
+/// Created by [`QuicVideoTransport::listen`].  Call [`accept`] after
+/// distributing the certificate to the client.
+///
+/// [`accept`]: QuicListener::accept
+pub struct QuicListener {
+    endpoint: Endpoint,
+}
+
+impl QuicListener {
+    /// Returns the local address the listener is bound to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Io`] if the OS cannot return the address.
+    pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
+        self.endpoint.local_addr().map_err(TransportError::Io)
+    }
+
+    /// Waits for one incoming QUIC connection and returns a [`QuicVideoTransport`].
+    ///
+    /// # Errors
+    ///
+    /// - [`TransportError::EndpointClosed`] if the endpoint shuts down before
+    ///   a connection arrives.
+    /// - [`TransportError::Connection`] if the QUIC handshake fails.
+    pub async fn accept(self) -> Result<QuicVideoTransport, TransportError> {
+        let incoming = self
+            .endpoint
+            .accept()
+            .await
+            .ok_or(TransportError::EndpointClosed)?;
+        let connection = incoming.await?;
+        Ok(QuicVideoTransport::from_connection(connection))
+    }
+}
+
+// ── QuicVideoTransport ────────────────────────────────────────────────────────
+
+/// QUIC-based video transport that sends and receives [`EncodedPacket`]s as
+/// RFC 9221 unreliable datagrams.
+pub struct QuicVideoTransport {
+    connection: Connection,
+    pub(crate) fragmenter: VideoFragmenter,
+    reassembler: VideoReassembler,
+}
+
+impl QuicVideoTransport {
+    /// Binds a server endpoint and returns a [`QuicListener`] together with
+    /// the self-signed certificate DER.
+    ///
+    /// Share the certificate with the connecting client via an out-of-band
+    /// channel **before** calling [`QuicListener::accept`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] if TLS generation or socket binding fails.
+    pub fn listen(
+        bind_addr: SocketAddr,
+    ) -> Result<(QuicListener, CertificateDer<'static>), TransportError> {
+        let (cert_der, server_config) = make_server_config()?;
+        let endpoint = Endpoint::server(server_config, bind_addr)?;
+        Ok((QuicListener { endpoint }, cert_der))
+    }
+
+    /// Creates a client-side transport connecting to `server_addr`.
+    ///
+    /// `server_cert` must be the DER certificate returned by the server's
+    /// [`listen`] call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] if TLS setup or the QUIC handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `"0.0.0.0:0"` cannot be parsed as a `SocketAddr` (unreachable
+    /// in practice).
+    ///
+    /// [`listen`]: QuicVideoTransport::listen
+    pub async fn connect(
+        server_addr: SocketAddr,
+        server_cert: CertificateDer<'static>,
+    ) -> Result<Self, TransportError> {
+        let client_config = make_client_config(server_cert)?;
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("valid wildcard address");
+        let mut endpoint = Endpoint::client(bind_addr)?;
+        endpoint.set_default_client_config(client_config);
+        let connection = endpoint.connect(server_addr, "localhost")?.await?;
+        Ok(Self::from_connection(connection))
+    }
+
+    /// Wraps an existing [`Connection`] with default fragmenter and reassembler.
+    pub(crate) fn from_connection(connection: Connection) -> Self {
+        Self {
+            connection,
+            fragmenter: VideoFragmenter::with_default_payload(),
+            reassembler: VideoReassembler::with_default_max(),
+        }
+    }
+
+    /// Sends an [`EncodedPacket`] as one or more QUIC unreliable datagrams.
+    ///
+    /// Returns the number of fragments sent.  Returns `Ok(0)` for empty
+    /// packets without sending any datagrams.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::SendDatagram`] if the QUIC layer rejects a
+    /// datagram.
+    // `async` is intentional: keeps the signature symmetric with `recv_video`
+    // and compatible with the `NetworkTransport` trait's async contract.
+    #[allow(clippy::unused_async)]
+    pub async fn send_video(&mut self, packet: &EncodedPacket) -> Result<usize, TransportError> {
+        let frags = self.fragmenter.fragment(packet);
+        let count = frags.len();
+        for frag in frags {
+            self.connection.send_datagram(frag.encode())?;
+        }
+        Ok(count)
+    }
+
+    /// Waits for the next fully-reassembled [`EncodedPacket`].
+    ///
+    /// Fragments for incomplete frames dropped by the network are silently
+    /// discarded; this method loops until a complete frame is available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Connection`] if the underlying QUIC
+    /// connection is lost.
+    pub async fn recv_video(&mut self) -> Result<EncodedPacket, TransportError> {
+        loop {
+            let datagram = self.connection.read_datagram().await?;
+            let frag = VideoFragment::decode(&datagram)?;
+
+            // Evict frames outside the sliding window to bound memory.
+            #[allow(clippy::cast_possible_truncation)]
+            let window = MAX_IN_FLIGHT_FRAMES as u32;
+            if frag.frame_id >= window {
+                self.reassembler.evict_before(frag.frame_id - window);
+            }
+
+            if let Some(packet) = self.reassembler.ingest(frag) {
+                return Ok(packet);
+            }
+        }
+    }
+}
+
+// ── TLS helpers ───────────────────────────────────────────────────────────────
+
+/// Generates a self-signed TLS certificate and a matching [`ServerConfig`]
+/// with datagram support enabled.
+fn make_server_config() -> Result<(CertificateDer<'static>, ServerConfig), TransportError> {
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(["localhost".to_owned()])
+            .map_err(|e| TransportError::TlsError(e.to_string()))?;
+
+    let cert_der: CertificateDer<'static> = cert.der().clone();
+    let priv_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+
+    let server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der.clone()], priv_key)
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
+
+    let quic_server_config = QuicServerConfig::try_from(server_crypto)
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
+
+    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+    // Enable datagram support by setting a non-None receive buffer.
+    Arc::get_mut(&mut server_config.transport)
+        .expect("no other Arc references at construction time")
+        .datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
+
+    Ok((cert_der, server_config))
+}
+
+/// Builds a [`ClientConfig`] that trusts exactly one server certificate, with
+/// datagram support enabled.
+fn make_client_config(
+    server_cert: CertificateDer<'static>,
+) -> Result<ClientConfig, TransportError> {
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(server_cert)
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
+
+    let client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    let quic_client_config = QuicClientConfig::try_from(client_crypto)
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
+
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
+
+    let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
+    client_config.transport_config(Arc::new(transport_config));
+
+    Ok(client_config)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TLS helpers ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_make_server_config_succeeds() {
+        assert!(make_server_config().is_ok());
+    }
+
+    #[test]
+    fn test_make_server_config_cert_starts_with_sequence_tag() {
+        let (cert_der, _) = make_server_config().unwrap();
+        assert!(!cert_der.is_empty());
+        assert_eq!(
+            cert_der[0], 0x30,
+            "DER cert must start with SEQUENCE (0x30)"
+        );
+    }
+
+    #[test]
+    fn test_make_server_config_produces_unique_certs() {
+        let (c1, _) = make_server_config().unwrap();
+        let (c2, _) = make_server_config().unwrap();
+        assert_ne!(c1.as_ref(), c2.as_ref());
+    }
+
+    #[test]
+    fn test_make_client_config_succeeds_with_valid_cert() {
+        let (cert_der, _) = make_server_config().unwrap();
+        assert!(make_client_config(cert_der).is_ok());
+    }
+
+    #[test]
+    fn test_make_client_config_fails_with_garbage_cert() {
+        let bad = CertificateDer::from(vec![0u8; 16]);
+        assert!(make_client_config(bad).is_err());
+    }
+
+    // ── QuicListener::local_addr ──────────────────────────────────────────────
+    // `quinn::Endpoint::server` requires a tokio runtime even though `listen`
+    // is not async, so these tests use `#[tokio::test]`.
+
+    #[tokio::test]
+    async fn test_listen_returns_nonzero_port() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, _cert) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert_ne!(addr.port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_listen_twice_binds_different_ports() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (l1, _) = QuicVideoTransport::listen(bind).unwrap();
+        let (l2, _) = QuicVideoTransport::listen(bind).unwrap();
+        assert_ne!(
+            l1.local_addr().unwrap().port(),
+            l2.local_addr().unwrap().port()
+        );
+    }
+
+    // ── Loopback integration tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_roundtrip_single_fragment() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.expect("accept") });
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let mut server = server_task.await.expect("server task");
+
+        let original = EncodedPacket::new(vec![1u8, 2, 3, 4, 5], true, 42, 16_667);
+        let sent = client.send_video(&original).await.expect("send_video");
+        assert_eq!(sent, 1);
+
+        let received = server.recv_video().await.expect("recv_video");
+        assert_eq!(received.data, original.data);
+        assert_eq!(received.is_keyframe, original.is_keyframe);
+    }
+
+    #[tokio::test]
+    async fn test_send_empty_packet_returns_zero_fragments() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let _server_task = tokio::spawn(async move { listener.accept().await });
+
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let count = client
+            .send_video(&EncodedPacket::new(vec![], false, 0, 0))
+            .await
+            .expect("send_video");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_multi_fragment() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.expect("accept") });
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let mut server = server_task.await.expect("server task");
+
+        // Use a tiny fragmenter to force 3 fragments for 12 bytes of data.
+        client.fragmenter = VideoFragmenter::new(4);
+        let data: Vec<u8> = (0u8..12).collect();
+        let sent = client
+            .send_video(&EncodedPacket::new(data.clone(), false, 0, 0))
+            .await
+            .expect("send");
+        assert_eq!(sent, 3);
+
+        let received = server.recv_video().await.expect("recv");
+        assert_eq!(received.data, data);
+    }
+
+    #[tokio::test]
+    async fn test_keyframe_flag_preserved_through_transport() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.expect("accept") });
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let mut server = server_task.await.expect("server task");
+
+        let pkt = EncodedPacket::new(vec![0xDE, 0xAD, 0xBE, 0xEF], true, 0, 0);
+        client.send_video(&pkt).await.expect("send");
+        let received = server.recv_video().await.expect("recv");
+        assert!(received.is_keyframe);
+        assert_eq!(received.data, pkt.data);
+    }
+
+    #[tokio::test]
+    async fn test_sliding_window_eviction_does_not_stall_recv() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.expect("accept") });
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let mut server = server_task.await.expect("server task");
+
+        for i in 0u8..10 {
+            client
+                .send_video(&EncodedPacket::new(vec![i], false, 0, 0))
+                .await
+                .expect("send");
+        }
+        for _ in 0u8..10 {
+            server.recv_video().await.expect("recv");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_from_connection_uses_default_fragment_payload() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move { listener.accept().await });
+
+        let client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        assert_eq!(
+            client.fragmenter.max_payload(),
+            crate::wire::MAX_FRAGMENT_PAYLOAD,
+        );
+    }
+}
