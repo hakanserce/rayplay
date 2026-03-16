@@ -241,11 +241,19 @@ pub(crate) async fn stream_with_pipeline(
         tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(ENCODE_CHANNEL_CAPACITY);
     let session_start = std::time::Instant::now();
 
-    let _encode_handle = tokio::task::spawn_blocking(move || {
+    let encode_handle = tokio::task::spawn_blocking(move || {
         drive_encode_loop(capturer, encoder, packet_tx, session_start);
     });
 
-    run_send_loop(transport, packet_rx, shutdown).await
+    let result = run_send_loop(transport, packet_rx, shutdown).await;
+    // packet_rx is dropped above → packet_tx.is_closed() becomes true on the
+    // next Timeout cycle and drive_encode_loop returns.  Awaiting the handle
+    // here surfaces any encode-thread panic as an explicit error rather than
+    // letting it go unobserved.
+    encode_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("encode thread panicked: {e}"))?;
+    result
 }
 
 /// Resolves platform-specific capture and encoder then calls
@@ -565,6 +573,26 @@ mod tests {
         assert_eq!(e.config().fps, cfg.fps);
     }
 
+    /// Panics inside `encode` — used to verify that an encode-thread panic is
+    /// surfaced as an error by `stream_with_pipeline` rather than silently lost.
+    struct PanickingEncoder {
+        config: EncoderConfig,
+    }
+
+    impl VideoEncoder for PanickingEncoder {
+        fn encode(&mut self, _frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+            panic!("deliberate encode-thread panic for testing");
+        }
+
+        fn flush(&mut self) -> Result<Vec<EncodedPacket>, VideoError> {
+            Ok(vec![])
+        }
+
+        fn config(&self) -> &EncoderConfig {
+            &self.config
+        }
+    }
+
     // ── HostArgs defaults ─────────────────────────────────────────────────────
 
     #[test]
@@ -596,6 +624,12 @@ mod tests {
     fn test_host_args_explicit_port() {
         let args = HostArgs::parse_from(["rayhost", "--port", "9000"]);
         assert_eq!(args.port, 9000);
+    }
+
+    #[test]
+    fn test_host_args_short_port_flag() {
+        let args = HostArgs::parse_from(["rayhost", "-p", "8080"]);
+        assert_eq!(args.port, 8080);
     }
 
     #[test]
@@ -1086,6 +1120,50 @@ mod tests {
         let result = server_task.await.unwrap();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("stub failure"));
+    }
+
+    /// Covers the `encode_handle.await` panic path in `stream_with_pipeline`.
+    ///
+    /// When the encode thread panics, `packet_tx` is dropped (unwind drops it),
+    /// so `packet_rx.recv()` returns `None`, `run_send_loop` exits cleanly, and
+    /// the awaited `JoinHandle` returns a `JoinError` which we map to an error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer4_stream_with_pipeline_encode_thread_panic_propagates_as_error() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            let transport = listener.accept().await.unwrap();
+            let capturer = Box::new(StubCapturer::new(1, 2, 2));
+            let encoder = Box::new(PanickingEncoder {
+                config: EncoderConfig::new(2, 2, 60),
+            });
+            stream_with_pipeline(transport, capturer, encoder, rx).await
+        });
+
+        QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let result = server_task.await.unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("panicked"));
+    }
+
+    #[test]
+    fn test_panicking_encoder_flush_returns_empty_vec() {
+        let mut e = PanickingEncoder {
+            config: EncoderConfig::new(2, 2, 60),
+        };
+        assert!(e.flush().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_panicking_encoder_config_returns_encoder_config() {
+        let cfg = EncoderConfig::new(2, 2, 60);
+        let e = PanickingEncoder {
+            config: cfg.clone(),
+        };
+        assert_eq!(e.config().width, cfg.width);
     }
 
     // ── stream (non-Windows stub) ─────────────────────────────────────────────
