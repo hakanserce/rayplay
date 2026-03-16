@@ -15,13 +15,17 @@ RawFrame
   ▼
 EncodedPacket
   │
-  │  FrameChunker::chunk()
+  │  VideoFragmenter::fragment()
   ▼
-Vec<NetworkChunk>
+Vec<VideoFragment>
   │
-  │  UDP send (rayplay-network)
+  │  QUIC unreliable datagrams (RFC 9221)   ── rayplay-network ──►
   ▼
 Client
+  │
+  │  VideoReassembler::ingest()
+  ▼
+EncodedPacket
 ```
 
 ---
@@ -114,7 +118,7 @@ One encoded video frame (a set of HEVC NAL units) output by the encoder.
 - **Keyframe (IDR):** self-contained; the decoder can start here without prior frames
 - **P-frame:** depends on previously decoded frames; much smaller than a keyframe
 - **Produced by:** `VideoEncoder::encode()` / `VideoEncoder::flush()`
-- **Consumed by:** `FrameChunker::chunk()`
+- **Consumed by:** `VideoFragmenter::fragment()` in `rayplay-network`
 
 Typical sizes over HEVC at 1080p60:
 
@@ -125,36 +129,53 @@ P-frame   ████                                  ~20 kB
 
 ---
 
-### `FrameChunker`
+### `VideoFragmenter` (in `rayplay-network`)
 
-Splits an `EncodedPacket` into UDP-sized pieces.
+Splits an `EncodedPacket` into QUIC-datagram-sized `VideoFragment`s.
 
-- **Default chunk size:** 1200 bytes (fits within a 1280-byte IPv6 MTU with headers)
-- **Produced by:** calling `FrameChunker::chunk(packet)`
-- **Output:** `Vec<NetworkChunk>` — reassembled on the client using packet/chunk indices
+- **Default payload size:** 1188 bytes (`MAX_FRAGMENT_PAYLOAD`) — fits within PMTU after 12-byte header and QUIC/UDP headers
+- **Assigns a monotonically increasing `frame_id`** (wraps at `u32::MAX`) shared across all fragments of one packet
+- **Produced by:** calling `VideoFragmenter::fragment(packet)`
+- **Output:** `Vec<VideoFragment>`
 
 ```
-EncodedPacket  (e.g. 3600 bytes)
+EncodedPacket  (e.g. 3564 bytes)
 │
-├──► NetworkChunk { packet_index: 7, chunk_index: 0, total_chunks: 3, data: [1200 B] }
-├──► NetworkChunk { packet_index: 7, chunk_index: 1, total_chunks: 3, data: [1200 B] }
-└──► NetworkChunk { packet_index: 7, chunk_index: 2, total_chunks: 3, data: [1200 B] }
+├──► VideoFragment { frame_id: 7, frag_index: 0, frag_total: 3, payload: [1188 B] }
+├──► VideoFragment { frame_id: 7, frag_index: 1, frag_total: 3, payload: [1188 B] }
+└──► VideoFragment { frame_id: 7, frag_index: 2, frag_total: 3, payload: [1188 B] }
 ```
 
-The `packet_index` wraps at `u32::MAX`. `total_chunks` is capped at `u16::MAX`
-(≈ 78 MB per packet at the default chunk size — unreachable in practice).
+The `frame_id` wraps at `u32::MAX`. `frag_total` is capped at `u16::MAX`
+(≈ 78 MB per packet at the default payload size — unreachable in practice).
 
 ---
 
-### `NetworkChunk`
+### `VideoFragment` (in `rayplay-network`)
 
-A single UDP datagram payload.
+A single QUIC unreliable datagram payload with a 12-byte wire header.
 
-- **Fields:** `data`, `packet_index`, `chunk_index`, `total_chunks`, `is_keyframe`, `timestamp_us`
-- **Produced by:** `FrameChunker::chunk()`
-- **Consumed by:** the network layer (`rayplay-network`) and reassembled on the client
+- **Fields:** `frame_id`, `frag_index`, `frag_total`, `channel`, `flags`, `payload`
+- **`flags`:** bit 0 = `FLAG_KEYFRAME`; set on all fragments of a keyframe
+- **`channel`:** `Channel::Video` (value 0); audio/input channels added in future UCs
+- **Produced by:** `VideoFragmenter::fragment()`
+- **Consumed by:** `VideoReassembler::ingest()` after being received from the QUIC layer
 
-The receiver buffers chunks by `packet_index` and reassembles when `chunk_index == total_chunks - 1`.
+Wire format (12-byte big-endian header + payload):
+
+```
+ 0               1               2               3
+ 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         frame_id (u32)                         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      frag_index (u16)         |       frag_total (u16)        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    channel (u8)   |  flags (u8)|        reserved (u16)        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       payload (variable)                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
 
 ---
 
@@ -174,12 +195,22 @@ EncodedPacket
   timestamp_us: 16_667
   duration_us: 16_667   (1 frame @ 60 fps)
 
-        │  FrameChunker::chunk()  (max_chunk_size = 1200)
+        │  VideoFragmenter::fragment()  (max_payload = 1188)
 
-NetworkChunk × 125   (125 × 1200 B = 150,000 B)
-  packet_index: 0
-  chunk_index:  0 … 124
-  total_chunks: 125
-  is_keyframe:  true
-  timestamp_us: 16_667
+VideoFragment × 127   (126 × 1188 B + 1 × 372 B = 150,000 B)
+  frame_id:    0
+  frag_index:  0 … 126
+  frag_total:  127
+  flags:       FLAG_KEYFRAME (bit 0)
+  channel:     Video
+
+        │  QUIC unreliable datagrams (RFC 9221)  ──LAN──►
+
+VideoReassembler::ingest()   [buffers up to 4 in-flight frames]
+
+        │  all 127 fragments received → complete
+
+EncodedPacket
+  data: ~150,000 bytes (HEVC NAL units, identical to sender)
+  is_keyframe: true
 ```
