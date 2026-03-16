@@ -9,6 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use host::{HostArgs, HostConfig};
 
+// llvm-cov:excl-start
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -21,12 +22,14 @@ async fn main() -> Result<()> {
     let args = HostArgs::parse();
     let config = HostConfig::from_args(&args);
 
+    // TODO(UC-pairing): distribute cert_der to the client via the discovery /
+    // SPAKE2 pairing channel (ADR-007) so the client can authenticate the server.
     let (listener, _cert_der) = QuicVideoTransport::listen(config.bind_addr)
-        .map_err(|e| anyhow::anyhow!("failed to bind: {e}"))?;
+        .map_err(|e| anyhow::Error::from(e).context("failed to bind"))?;
 
     let addr = listener
         .local_addr()
-        .map_err(|e| anyhow::anyhow!("local_addr: {e}"))?;
+        .map_err(|e| anyhow::Error::from(e).context("local_addr"))?;
 
     tracing::info!(
         addr = %addr,
@@ -46,3 +49,4 @@ async fn main() -> Result<()> {
 
     host::serve(listener, config, shutdown_rx).await
 }
+// llvm-cov:excl-stop
