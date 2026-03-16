@@ -281,4 +281,14 @@ mod tests {
         assert_eq!(frags.len(), 1);
         assert_eq!(frags[0].payload, vec![0x42]);
     }
+
+    #[test]
+    #[should_panic(expected = "too many fragments")]
+    fn test_fragment_panics_when_fragment_count_exceeds_u16_max() {
+        // max_payload=1 means each byte becomes its own fragment;
+        // 65_536 bytes → 65_536 fragments which overflows u16.
+        let mut f = VideoFragmenter::new(1);
+        let huge = EncodedPacket::new(vec![0u8; 65_536], false, 0, 0);
+        let _ = f.fragment(&huge);
+    }
 }
