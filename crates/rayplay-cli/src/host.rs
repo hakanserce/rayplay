@@ -1,4 +1,4 @@
-//! `RayHost` server — CLI configuration and connection-accept loop (UC-006).
+//! `RayHost` server — CLI configuration and connection-accept loop (UC-006, UC-008).
 
 use std::{future::Future, net::SocketAddr};
 
@@ -13,6 +13,7 @@ use rayplay_video::{
     encoder::VideoEncoder,
     frame::RawFrame,
 };
+use tokio_util::sync::CancellationToken;
 
 /// Command-line arguments for the `rayhost` binary.
 #[derive(Parser, Debug, Clone)]
@@ -74,40 +75,46 @@ impl HostConfig {
 
 // ── Accept loop ───────────────────────────────────────────────────────────────
 
-/// Waits for one client connection (or a shutdown signal) and calls
-/// `on_connect` with the established transport and the remaining shutdown
-/// receiver.
+/// Accepts clients in a loop, calling `on_connect` for each connection, until
+/// `token` is cancelled.
 ///
-/// Using a generic `on_connect` keeps the accept/shutdown logic testable
-/// without requiring the real platform-specific streaming pipeline.
+/// After a client disconnects (handler returns), the loop continues accepting
+/// the next client.  Accept errors are logged and the loop continues.
 ///
 /// # Errors
 ///
-/// Propagates errors from the QUIC handshake or from `on_connect`.
+/// Propagates errors from `on_connect`.
 pub(crate) async fn serve_with_handler<F, Fut>(
     listener: QuicListener,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    token: CancellationToken,
     on_connect: F,
 ) -> Result<()>
 where
-    F: FnOnce(QuicVideoTransport, tokio::sync::oneshot::Receiver<()>) -> Fut,
+    F: Fn(QuicVideoTransport, CancellationToken) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let accept_result = tokio::select! {
-        _ = &mut shutdown => None,
-        result = listener.accept() => Some(result),
-    };
+    loop {
+        let accept_result = tokio::select! {
+            () = token.cancelled() => return Ok(()),
+            result = listener.accept() => result,
+        };
 
-    match accept_result {
-        None => {
-            tracing::info!("Shutdown signal received, stopping");
-            Ok(())
+        match accept_result {
+            Ok(transport) => {
+                tracing::info!("Client connected");
+                let child = token.child_token();
+                if let Err(e) = on_connect(transport, child).await {
+                    tracing::warn!(error = %e, "Client session ended with error");
+                }
+                tracing::info!("Client disconnected, waiting for next connection");
+            }
+            Err(e) => {
+                if token.is_cancelled() {
+                    return Ok(());
+                }
+                tracing::warn!(error = %e, "Accept failed, retrying");
+            }
         }
-        Some(Ok(transport)) => {
-            tracing::info!("Client connected");
-            on_connect(transport, shutdown).await
-        }
-        Some(Err(e)) => Err(anyhow::anyhow!("connection failed: {e}")),
     }
 }
 
@@ -120,10 +127,11 @@ where
 pub async fn serve(
     listener: QuicListener,
     config: HostConfig,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
+    token: CancellationToken,
 ) -> Result<()> {
-    serve_with_handler(listener, shutdown, |transport, shutdown| {
-        stream(transport, config, shutdown)
+    serve_with_handler(listener, token, |transport, child| {
+        let config = config.clone();
+        async move { stream(transport, config, child).await }
     })
     .await
 }
@@ -162,10 +170,12 @@ pub(crate) fn drive_encode_loop(
         };
 
         let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+        tracing::debug!(timestamp_us = ts, "frame_captured");
         let raw = RawFrame::new(frame.data, frame.width, frame.height, frame.stride, ts);
 
         match encoder.encode(&raw) {
             Ok(Some(pkt)) => {
+                tracing::debug!(timestamp_us = ts, size = pkt.data.len(), "frame_encoded");
                 if packet_tx.blocking_send(Ok(pkt)).is_err() {
                     tracing::debug!("encode channel closed, stream is shutting down");
                     return;
@@ -191,11 +201,11 @@ pub(crate) fn drive_encode_loop(
 async fn run_send_loop(
     mut transport: QuicVideoTransport,
     mut packet_rx: tokio::sync::mpsc::Receiver<anyhow::Result<EncodedPacket>>,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    token: CancellationToken,
 ) -> Result<()> {
     loop {
         tokio::select! {
-            _ = &mut shutdown => {
+            () = token.cancelled() => {
                 tracing::info!("Shutdown signal received, stopping stream");
                 break;
             }
@@ -206,6 +216,7 @@ async fn run_send_loop(
                             .send_video(&p)
                             .await
                             .map_err(anyhow::Error::from)?;
+                        tracing::debug!(timestamp_us = p.timestamp_us, "packet_sent");
                         // Yield after each send so the tokio I/O driver can
                         // transmit the queued datagram before the next packet.
                         tokio::task::yield_now().await;
@@ -233,7 +244,7 @@ pub(crate) async fn stream_with_pipeline(
     transport: QuicVideoTransport,
     capturer: Box<dyn ScreenCapturer>,
     encoder: Box<dyn VideoEncoder>,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
+    token: CancellationToken,
 ) -> Result<()> {
     const ENCODE_CHANNEL_CAPACITY: usize = 4;
 
@@ -245,7 +256,7 @@ pub(crate) async fn stream_with_pipeline(
         drive_encode_loop(capturer, encoder, packet_tx, session_start);
     });
 
-    let result = run_send_loop(transport, packet_rx, shutdown).await;
+    let result = run_send_loop(transport, packet_rx, token).await;
     // packet_rx is dropped above → packet_tx.is_closed() becomes true on the
     // next Timeout cycle and drive_encode_loop returns.  Awaiting the handle
     // here surfaces any encode-thread panic as an explicit error rather than
@@ -262,7 +273,7 @@ pub(crate) async fn stream_with_pipeline(
 async fn stream(
     transport: QuicVideoTransport,
     config: HostConfig,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
+    token: CancellationToken,
 ) -> Result<()> {
     use rayplay_video::{CaptureConfig, create_capturer, create_encoder};
 
@@ -277,7 +288,7 @@ async fn stream(
         .with_bitrate(config.encoder_config.bitrate);
     let encoder = create_encoder(enc_config).map_err(anyhow::Error::from)?;
 
-    stream_with_pipeline(transport, capturer, encoder, shutdown).await
+    stream_with_pipeline(transport, capturer, encoder, token).await
 }
 
 // The Windows version is `async`; keep the same signature here.
@@ -286,7 +297,7 @@ async fn stream(
 async fn stream(
     _transport: QuicVideoTransport,
     _config: HostConfig,
-    _shutdown: tokio::sync::oneshot::Receiver<()>,
+    _token: CancellationToken,
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "screen capture and NVENC encoding are only supported on Windows"
@@ -333,10 +344,7 @@ mod tests {
     /// Handler that succeeds immediately — used where the on_connect callback
     /// must be callable and covered, and also passed (but never called) in
     /// shutdown-before-connect tests so a single function body covers all cases.
-    async fn noop_handler(
-        _: QuicVideoTransport,
-        _: tokio::sync::oneshot::Receiver<()>,
-    ) -> Result<()> {
+    async fn noop_handler(_: QuicVideoTransport, _: CancellationToken) -> Result<()> {
         Ok(())
     }
 
@@ -714,19 +722,19 @@ mod tests {
     #[tokio::test]
     async fn test_serve_with_handler_shutdown_before_accept() {
         let (listener, _addr) = listen_loopback();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tx.send(()).unwrap();
-        let result = serve_with_handler(listener, rx, noop_handler).await;
+        let token = CancellationToken::new();
+        token.cancel();
+        let result = serve_with_handler(listener, token, noop_handler).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_serve_with_handler_shutdown_while_waiting() {
         let (listener, _addr) = listen_loopback();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(serve_with_handler(listener, rx, noop_handler));
+        let token = CancellationToken::new();
+        let task = tokio::spawn(serve_with_handler(listener, token.clone(), noop_handler));
         tokio::task::yield_now().await;
-        tx.send(()).unwrap();
+        token.cancel();
         assert!(task.await.unwrap().is_ok());
     }
 
@@ -735,50 +743,62 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(serve_with_handler(listener, rx, noop_handler));
+        let token = CancellationToken::new();
+        let task = tokio::spawn(serve_with_handler(listener, token.clone(), noop_handler));
         QuicVideoTransport::connect(addr, cert_der)
             .await
             .expect("connect");
+        // noop_handler returns Ok, then the loop waits for next client;
+        // cancel the token to stop the loop.
+        tokio::task::yield_now().await;
+        token.cancel();
         assert!(task.await.unwrap().is_ok());
     }
 
     #[tokio::test]
-    async fn test_serve_with_handler_on_connect_error_propagates() {
+    async fn test_serve_with_handler_on_connect_error_logged_and_loop_continues() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let token = CancellationToken::new();
+        let token2 = token.clone();
         let task = tokio::spawn(serve_with_handler(
             listener,
-            rx,
-            |_transport, _shutdown| async { Err(anyhow::anyhow!("handler error")) },
+            token,
+            move |_transport, _child| {
+                let t = token2.clone();
+                async move {
+                    t.cancel();
+                    Err(anyhow::anyhow!("handler error"))
+                }
+            },
         ));
         QuicVideoTransport::connect(addr, cert_der)
             .await
             .expect("connect");
-        let result = task.await.unwrap();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("handler error"));
+        // Handler returns error → logged as warning → loop continues → token
+        // cancelled → loop exits cleanly.
+        assert!(task.await.unwrap().is_ok());
     }
 
     #[tokio::test]
-    async fn test_serve_with_handler_connection_failure_returns_error() {
+    async fn test_serve_with_handler_accept_error_retries() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, _correct_cert) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
         let (_, wrong_cert) = QuicVideoTransport::listen("127.0.0.1:0".parse().unwrap()).unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(serve_with_handler(listener, rx, noop_handler));
-        let _ = QuicVideoTransport::connect(addr, wrong_cert).await;
-        let result = task.await.unwrap();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("connection failed")
-        );
+        let token = CancellationToken::new();
+        let token2 = token.clone();
+        let task = tokio::spawn(async move {
+            // Attempt connection with wrong cert — accept will fail and loop
+            // should retry.  Cancel after the failed attempt.
+            let _ = QuicVideoTransport::connect(addr, wrong_cert).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            token2.cancel();
+        });
+        let result = serve_with_handler(listener, token, noop_handler).await;
+        task.await.unwrap();
+        assert!(result.is_ok());
     }
 
     // ── serve ─────────────────────────────────────────────────────────────────
@@ -786,9 +806,9 @@ mod tests {
     #[tokio::test]
     async fn test_serve_shuts_down_cleanly_before_accept() {
         let (listener, _addr) = listen_loopback();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tx.send(()).unwrap();
-        assert!(serve(listener, default_config(), rx).await.is_ok());
+        let token = CancellationToken::new();
+        token.cancel();
+        assert!(serve(listener, default_config(), token).await.is_ok());
     }
 
     // ── drive_encode_loop — direct unit tests ─────────────────────────────────
@@ -861,9 +881,6 @@ mod tests {
     fn test_drive_encode_loop_exits_when_blocking_send_fails() {
         let (tx, rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
         drop(rx);
-        // StubCapturer(1) returns a real frame (not a Timeout), so the
-        // is_closed() check in the Timeout branch is bypassed — we go straight
-        // to encode→blocking_send, which then fails because rx was dropped.
         let capturer = Box::new(StubCapturer::new(1, 2, 2));
         let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
         drive_encode_loop(capturer, encoder, tx, std::time::Instant::now());
@@ -874,7 +891,7 @@ mod tests {
     #[test]
     fn test_drive_encode_loop_ok_none_buffering_continues() {
         let (tx, rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
-        drop(rx); // is_closed() becomes true after Ok(None) → continue → Timeout
+        drop(rx);
         let capturer = Box::new(StubCapturer::new(1, 2, 2));
         let encoder = Box::new(BufferingEncoder {
             config: EncoderConfig::new(2, 2, 60),
@@ -895,10 +912,10 @@ mod tests {
         let (packet_tx, packet_rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
         drop(packet_tx); // recv() will return None immediately
 
-        let (_shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let token = CancellationToken::new();
         let server_task = tokio::spawn(async move {
             let transport = listener.accept().await.unwrap();
-            run_send_loop(transport, packet_rx, shutdown_rx).await
+            run_send_loop(transport, packet_rx, token).await
         });
 
         QuicVideoTransport::connect(addr, cert_der).await.unwrap();
@@ -973,7 +990,6 @@ mod tests {
                 .expect("no encode error");
             assert_eq!(pkt.data, vec![i]);
         }
-        // rx drops here → encode thread exits via is_closed() on next Timeout.
     }
 
     // ── Layer 3: drive_encode_loop → channel → QUIC (manual wiring) ──────────
@@ -1019,17 +1035,20 @@ mod tests {
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let server_task = tokio::spawn(async move {
-            let transport = listener.accept().await.unwrap();
-            let capturer = Box::new(StubCapturer::new(0, 2, 2));
-            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
-            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        let token = CancellationToken::new();
+        let server_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let transport = listener.accept().await.unwrap();
+                let capturer = Box::new(StubCapturer::new(0, 2, 2));
+                let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                stream_with_pipeline(transport, capturer, encoder, token).await
+            }
         });
 
         QuicVideoTransport::connect(addr, cert_der).await.unwrap();
         tokio::task::yield_now().await;
-        shutdown_tx.send(()).unwrap();
+        token.cancel();
         assert!(server_task.await.unwrap().is_ok());
     }
 
@@ -1039,19 +1058,22 @@ mod tests {
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let server_task = tokio::spawn(async move {
-            let transport = listener.accept().await.unwrap();
-            let capturer = Box::new(StubCapturer::new(1, 2, 2));
-            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
-            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        let token = CancellationToken::new();
+        let server_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let transport = listener.accept().await.unwrap();
+                let capturer = Box::new(StubCapturer::new(1, 2, 2));
+                let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                stream_with_pipeline(transport, capturer, encoder, token).await
+            }
         });
 
         let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
         let pkt = client.recv_video().await.expect("receive first packet");
         assert_eq!(pkt.data, vec![1u8]);
 
-        shutdown_tx.send(()).unwrap();
+        token.cancel();
         assert!(server_task.await.unwrap().is_ok());
     }
 
@@ -1062,12 +1084,15 @@ mod tests {
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let server_task = tokio::spawn(async move {
-            let transport = listener.accept().await.unwrap();
-            let capturer = Box::new(StubCapturer::new(N, 2, 2));
-            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
-            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        let token = CancellationToken::new();
+        let server_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let transport = listener.accept().await.unwrap();
+                let capturer = Box::new(StubCapturer::new(N, 2, 2));
+                let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                stream_with_pipeline(transport, capturer, encoder, token).await
+            }
         });
 
         let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
@@ -1076,7 +1101,7 @@ mod tests {
             assert_eq!(pkt.data, vec![i]);
         }
 
-        shutdown_tx.send(()).unwrap();
+        token.cancel();
         assert!(server_task.await.unwrap().is_ok());
     }
 
@@ -1086,12 +1111,12 @@ mod tests {
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let token = CancellationToken::new();
         let server_task = tokio::spawn(async move {
             let transport = listener.accept().await.unwrap();
             let capturer = Box::new(FailingCapturer);
             let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
-            stream_with_pipeline(transport, capturer, encoder, rx).await
+            stream_with_pipeline(transport, capturer, encoder, token).await
         });
 
         QuicVideoTransport::connect(addr, cert_der).await.unwrap();
@@ -1106,14 +1131,14 @@ mod tests {
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let token = CancellationToken::new();
         let server_task = tokio::spawn(async move {
             let transport = listener.accept().await.unwrap();
             let capturer = Box::new(StubCapturer::new(1, 2, 2));
             let encoder = Box::new(FailingEncoder {
                 config: EncoderConfig::new(2, 2, 60),
             });
-            stream_with_pipeline(transport, capturer, encoder, rx).await
+            stream_with_pipeline(transport, capturer, encoder, token).await
         });
 
         QuicVideoTransport::connect(addr, cert_der).await.unwrap();
@@ -1123,24 +1148,20 @@ mod tests {
     }
 
     /// Covers the `encode_handle.await` panic path in `stream_with_pipeline`.
-    ///
-    /// When the encode thread panics, `packet_tx` is dropped (unwind drops it),
-    /// so `packet_rx.recv()` returns `None`, `run_send_loop` exits cleanly, and
-    /// the awaited `JoinHandle` returns a `JoinError` which we map to an error.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_layer4_stream_with_pipeline_encode_thread_panic_propagates_as_error() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let token = CancellationToken::new();
         let server_task = tokio::spawn(async move {
             let transport = listener.accept().await.unwrap();
             let capturer = Box::new(StubCapturer::new(1, 2, 2));
             let encoder = Box::new(PanickingEncoder {
                 config: EncoderConfig::new(2, 2, 60),
             });
-            stream_with_pipeline(transport, capturer, encoder, rx).await
+            stream_with_pipeline(transport, capturer, encoder, token).await
         });
 
         QuicVideoTransport::connect(addr, cert_der).await.unwrap();
@@ -1174,12 +1195,12 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(serve(listener, default_config(), rx));
-        QuicVideoTransport::connect(addr, cert_der)
+        let _server = tokio::spawn(async move { listener.accept().await });
+        let transport = QuicVideoTransport::connect(addr, cert_der)
             .await
             .expect("connect");
-        let result = task.await.unwrap();
+        let token = CancellationToken::new();
+        let result = stream(transport, default_config(), token).await;
         assert!(result.is_err());
         assert!(
             result
@@ -1187,5 +1208,144 @@ mod tests {
                 .to_string()
                 .contains("only supported on Windows")
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_serve_continues_after_non_windows_stream_error() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let token = CancellationToken::new();
+        let token2 = token.clone();
+        let task = tokio::spawn(serve(listener, default_config(), token));
+        QuicVideoTransport::connect(addr, cert_der)
+            .await
+            .expect("connect");
+        // Handler error is logged, loop continues — cancel to stop.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        token2.cancel();
+        let result = task.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    // ── End-to-End integration tests (UC-008) ────────────────────────────────
+
+    /// AC-1: Starting host + client produces a live video stream.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_frames_flow_from_host_to_client() {
+        const N: usize = 5;
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let token = CancellationToken::new();
+        let host_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                serve_with_handler(listener, token, |transport, child| async move {
+                    let capturer = Box::new(StubCapturer::new(N, 2, 2));
+                    let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                    stream_with_pipeline(transport, capturer, encoder, child).await
+                })
+                .await
+            }
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        for i in 1u8..=N as u8 {
+            let pkt = client.recv_video().await.expect("recv_video");
+            assert_eq!(pkt.data, vec![i]);
+        }
+
+        token.cancel();
+        host_task.await.unwrap().unwrap();
+    }
+
+    /// AC-5: Host accepts second client after first disconnects.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_host_accepts_second_client_after_first_disconnects() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let token = CancellationToken::new();
+        let host_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                serve_with_handler(listener, token, |transport, child| async move {
+                    let capturer = Box::new(StubCapturer::new(3, 2, 2));
+                    let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                    stream_with_pipeline(transport, capturer, encoder, child).await
+                })
+                .await
+            }
+        });
+
+        // Client 1: connect, receive 1 packet, then disconnect
+        {
+            let mut c1 = QuicVideoTransport::connect(addr, cert_der.clone())
+                .await
+                .unwrap();
+            let _pkt = c1.recv_video().await.expect("client 1 recv");
+        }
+        // Give the host a moment to process disconnect and re-enter accept
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Client 2: connect, receive 1 packet
+        {
+            let mut c2 = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+            let pkt = c2.recv_video().await.expect("client 2 recv");
+            assert!(!pkt.data.is_empty());
+        }
+
+        token.cancel();
+        host_task.await.unwrap().unwrap();
+    }
+
+    /// AC-4: Shutdown token stops both sides cleanly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_shutdown_token_stops_both_sides_cleanly() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let token = CancellationToken::new();
+        let host_task = tokio::spawn({
+            let token = token.clone();
+            async move {
+                serve_with_handler(listener, token, |transport, child| async move {
+                    let capturer = Box::new(StubCapturer::new(100, 2, 2));
+                    let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                    stream_with_pipeline(transport, capturer, encoder, child).await
+                })
+                .await
+            }
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let _pkt = client.recv_video().await.expect("recv");
+        token.cancel();
+        assert!(host_task.await.unwrap().is_ok());
+    }
+
+    /// AC-4: Network error does not crash client (recv returns error, no panic).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_network_error_does_not_crash_client() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let server = server_task.await.unwrap();
+
+        // Drop server to close connection
+        drop(server);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Client recv should return an error, not panic
+        let result = client.recv_video().await;
+        assert!(result.is_err());
     }
 }

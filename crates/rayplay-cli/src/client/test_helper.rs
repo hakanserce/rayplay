@@ -95,6 +95,18 @@ fn test_null_decoder_flush_and_codec() {
 }
 
 #[test]
+fn test_null_decoder_fail_returns_corrupt_packet() {
+    use rayplay_video::decoder::VideoDecoder;
+
+    let mut d = NullDecoder {
+        emit: false,
+        fail: true,
+    };
+    let pkt = EncodedPacket::new(vec![1], false, 0, 0);
+    assert!(d.decode(&pkt).is_err());
+}
+
+#[test]
 fn test_skip_bad_decoder_flush_and_codec() {
     let mut d = SkipBadDecoder;
     assert!(d.flush().unwrap().is_empty());

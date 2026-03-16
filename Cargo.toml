@@ -19,6 +19,7 @@ winit             = "0.30"
 wgpu              = "22"
 crossbeam-channel = "0.5"
 pollster          = "0.3"
+tokio-util        = { version = "0.7", features = ["rt"] }
 
 [profile.dev]
 opt-level = 0
