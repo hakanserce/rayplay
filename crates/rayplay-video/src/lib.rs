@@ -31,7 +31,7 @@ pub use capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer, cr
 pub use chunker::{DEFAULT_CHUNK_SIZE, FrameChunker, NetworkChunk};
 pub use decoded_frame::{DecodedFrame, PixelFormat};
 pub use decoder::VideoDecoder;
-pub use encoder::{Bitrate, Codec, EncoderConfig, VideoEncoder, VideoError};
+pub use encoder::{Bitrate, Codec, EncoderConfig, VideoEncoder, VideoError, create_encoder};
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;
 

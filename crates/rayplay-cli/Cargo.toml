@@ -3,12 +3,18 @@ name = "rayplay-cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name    = "rayhost"
+path    = "src/main.rs"
+
 [dependencies]
-anyhow.workspace    = true
-tokio.workspace     = true
-tracing.workspace   = true
-serde.workspace     = true
+anyhow.workspace            = true
+clap                        = { workspace = true, features = ["derive"] }
+tokio.workspace             = true
+tracing.workspace           = true
+tracing-subscriber.workspace = true
+rayplay-network             = { path = "../rayplay-network" }
+rayplay-video               = { path = "../rayplay-video" }
 
 [dev-dependencies]
 criterion.workspace = true
-
