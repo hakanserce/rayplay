@@ -519,6 +519,16 @@ mod macos {
 
         /// Copies pixel data from a `CVPixelBuffer` into a `DecodedFrame`.
         ///
+        /// # Note — scaffolding
+        ///
+        /// This currently copies the pixel data out of the `CVPixelBuffer` via
+        /// `CVPixelBufferLockBaseAddress`. The intended path (UC-005) is zero-copy
+        /// `IOSurface` interop: call `new_hardware` and hand the surface handle to
+        /// the wgpu renderer as an external texture, bypassing the CPU entirely.
+        ///
+        /// TODO(UC-005): replace with `DecodedFrame::new_hardware` + `IOSurface`
+        /// handle so the renderer can import the surface directly (ADR-005).
+        ///
         /// Only available with `--features hw-codec-tests`.
         #[cfg(feature = "hw-codec-tests")]
         #[allow(clippy::cast_possible_truncation)] // pixel dimensions fit in u32 for any real frame
@@ -581,11 +591,14 @@ mod macos {
                 self.init_session(packet)?;
             }
             #[cfg(feature = "hw-codec-tests")]
-            return self.decode_packet(packet);
-            // Without hw-codec-tests, init_session always returns Err above.
-            // This line is only reached in hw builds where the cfg above fires.
-            #[allow(unreachable_code)]
-            Ok(None)
+            {
+                return self.decode_packet(packet);
+            }
+            // Without hw-codec-tests, init_session always returns Err before reaching here.
+            #[cfg(not(feature = "hw-codec-tests"))]
+            {
+                Ok(None)
+            }
         }
 
         fn flush(&mut self) -> Result<Vec<DecodedFrame>, VideoError> {
@@ -666,6 +679,13 @@ mod macos {
         fn test_annex_b_to_hvcc_data_without_start_codes_returns_empty() {
             // No start codes → split_nal_units returns [] → no output
             let input = [0xAAu8, 0xBB, 0xCC];
+            assert!(annex_b_to_hvcc(&input).is_empty());
+        }
+
+        #[test]
+        fn test_annex_b_to_hvcc_trailing_start_code_with_no_nal_bytes_returns_empty() {
+            // Start code at end with no bytes following — produces no NAL unit.
+            let input = [0x00u8, 0x00, 0x00, 0x01];
             assert!(annex_b_to_hvcc(&input).is_empty());
         }
 

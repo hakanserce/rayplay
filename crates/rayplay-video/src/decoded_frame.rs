@@ -29,6 +29,14 @@ impl PixelFormat {
 /// When `is_hardware_frame` is `true`, `data` is empty and the frame lives in
 /// GPU-resident memory; the renderer imports it via `IOSurface` interop (ADR-005)
 /// rather than uploading via `write_texture`.
+///
+/// # Field Visibility
+///
+/// All fields are `pub` for direct access by the renderer (UC-005). The two
+/// constructors (`new_cpu`, `new_hardware`) are the canonical way to create a
+/// frame and enforce the `is_hardware_frame ↔ data.is_empty()` invariant, but
+/// the invariant is not enforced at the type level — callers must not mutate
+/// fields directly in a way that breaks it.
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {
     /// Decoded pixel data. Empty when `is_hardware_frame` is `true`.
@@ -207,5 +215,19 @@ mod tests {
     fn test_expected_data_size_zero_dimensions() {
         let frame = DecodedFrame::new_cpu(vec![], 0, 0, 0, PixelFormat::Bgra8, 0);
         assert_eq!(frame.expected_data_size(), 0);
+    }
+
+    #[test]
+    fn test_expected_data_size_bgra8_stride_wider_than_width() {
+        // Hardware alignment: VideoToolbox may pad rows to e.g. 2048 for a 1920px frame.
+        let frame = DecodedFrame::new_cpu(vec![], 1920, 1080, 2048 * 4, PixelFormat::Bgra8, 0);
+        assert_eq!(frame.expected_data_size(), 2048 * 4 * 1080);
+    }
+
+    #[test]
+    fn test_expected_data_size_nv12_stride_wider_than_width() {
+        // NV12 with hardware stride padding: stride=2048 for 1920px frame.
+        let frame = DecodedFrame::new_cpu(vec![], 1920, 1080, 2048, PixelFormat::Nv12, 0);
+        assert_eq!(frame.expected_data_size(), 2048 * 1080 * 3 / 2);
     }
 }
