@@ -50,6 +50,7 @@ server discovery on LAN, and PIN-based security.
 | UC-014 | Automatic Host Discovery | P1 | M |
 | UC-015 | Session Management | P1 | M |
 | UC-016 | Connection Pairing & Security | P1 | M |
+| UC-025 | Host Wake-on-LAN | P1 | M |
 
 ---
 
@@ -77,6 +78,7 @@ The following ADRs must be resolved before implementing the corresponding UCs:
 
 | ADR | Title | Blocks |
 |-----|-------|--------|
+| ADR-000 | High level architecture design | All UCs |
 | ADR-001 | Zero-copy graphics capture/encode/send architecture | UC-001, UC-002, UC-003 |
 | ADR-002 | Low-latency audio capture/encode/send architecture | UC-012, UC-013 |
 | ADR-003 | Streaming protocol (raw UDP vs QUIC vs WebRTC vs other) | UC-003, UC-009, UC-010, UC-012 |
@@ -84,6 +86,7 @@ The following ADRs must be resolved before implementing the corresponding UCs:
 | ADR-005 | Window/rendering framework | UC-005, UC-022 |
 | ADR-006 | Input capture mechanism per platform | UC-009, UC-010, UC-011 |
 | ADR-007 | Security model (encryption, authentication, trust) | UC-016 |
+| ADR-008 | Android client UX design and platform trade-offs | UC-022 |
 
 ---
 
@@ -99,7 +102,7 @@ M1 (serial pipeline):
 M2 (three parallel tracks after UC-008):
   Input:   UC-009 + UC-010 → UC-011
   Audio:   UC-012 → UC-013
-  Connect: UC-014, UC-015 → UC-016
+  Connect: UC-014, UC-015 → UC-016 → UC-025
 
 M3 (mostly independent):
   UC-017 → UC-018
