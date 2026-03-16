@@ -1,10 +1,11 @@
-//! `rayhost` binary — entry point for the `RayPlay` host streaming server (UC-006).
+//! `rayhost` binary — entry point for the `RayPlay` host streaming server (UC-006, UC-008).
 
 mod host;
 
 use anyhow::Result;
 use clap::Parser;
 use rayplay_network::QuicVideoTransport;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use host::{HostArgs, HostConfig};
@@ -40,13 +41,14 @@ async fn main() -> Result<()> {
         "RayHost listening — waiting for client"
     );
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let token = CancellationToken::new();
+    let ctrl_token = token.clone();
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("Ctrl+C received");
-        let _ = shutdown_tx.send(());
+        ctrl_token.cancel();
     });
 
-    host::serve(listener, config, shutdown_rx).await
+    host::serve(listener, config, token).await
 }
 // llvm-cov:excl-stop

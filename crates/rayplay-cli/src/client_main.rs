@@ -1,4 +1,4 @@
-//! `rayview` binary — entry point for the `RayPlay` client viewer (UC-007).
+//! `rayview` binary — entry point for the `RayPlay` client viewer (UC-007, UC-008).
 
 mod client;
 
@@ -17,7 +17,7 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
-    use std::sync::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
 
     /// Bounded capacity of the decoded-frame channel between the network thread
     /// and the `winit` render loop.  Keeping this small (2) ensures the renderer
@@ -41,18 +41,13 @@ fn main() -> Result<()> {
         "RayView connecting"
     );
 
-    // Extract window dimensions before `config` is moved into the network thread.
     let width = config.width;
     let height = config.height;
 
     let (frame_tx, frame_rx) =
         crossbeam_channel::bounded::<DecodedFrame>(DEFAULT_FRAME_CHANNEL_CAPACITY);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    // Wrap in Arc<Mutex<Option>> so both Ctrl+C (net thread) and window-close
-    // (main thread) can fire the shutdown signal exactly once.
-    let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
-    let ctrlc_shutdown = Arc::clone(&shutdown);
+    let token = CancellationToken::new();
+    let ctrl_token = token.clone();
 
     // Spawn a background OS thread that owns the tokio runtime and QUIC
     // connection.  The winit event loop must run on the main thread (AppKit
@@ -60,19 +55,14 @@ fn main() -> Result<()> {
     let net_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Ctrl+C received, disconnecting");
-                    if let Some(tx) = ctrlc_shutdown.lock().expect("shutdown lock").take() {
-                        let _ = tx.send(());
-                    }
-                    // connect future is cancelled here; quinn sends CONNECTION_CLOSE via Drop.
-                }
-                result = client::connect(config, frame_tx, shutdown_rx) => {
-                    if let Err(e) = result {
-                        tracing::error!(error = %e, "Connection error");
-                    }
-                }
+            let ctrl_token2 = ctrl_token.clone();
+            tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                tracing::info!("Ctrl+C received, disconnecting");
+                ctrl_token2.cancel();
+            });
+            if let Err(e) = client::connect(config, frame_tx, ctrl_token).await {
+                tracing::error!(error = %e, "Connection error");
             }
         });
     });
@@ -84,9 +74,7 @@ fn main() -> Result<()> {
     }
 
     // Window closed — signal the networking thread to stop, then wait for it.
-    if let Some(tx) = shutdown.lock().expect("shutdown lock").take() {
-        let _ = tx.send(());
-    }
+    token.cancel();
     let _ = net_thread.join();
 
     render_result.map_err(|e| anyhow::anyhow!("render window: {e}"))

@@ -72,7 +72,7 @@ impl QuicListener {
     /// - [`TransportError::EndpointClosed`] if the endpoint shuts down before
     ///   a connection arrives.
     /// - [`TransportError::Connection`] if the QUIC handshake fails.
-    pub async fn accept(self) -> Result<QuicVideoTransport, TransportError> {
+    pub async fn accept(&self) -> Result<QuicVideoTransport, TransportError> {
         let incoming = self
             .endpoint
             .accept()

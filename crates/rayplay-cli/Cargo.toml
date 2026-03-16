@@ -16,6 +16,7 @@ anyhow.workspace             = true
 clap                         = { workspace = true, features = ["derive"] }
 crossbeam-channel.workspace  = true
 tokio.workspace              = true
+tokio-util.workspace         = true
 tracing.workspace            = true
 tracing-subscriber.workspace = true
 rayplay-network              = { path = "../rayplay-network" }
