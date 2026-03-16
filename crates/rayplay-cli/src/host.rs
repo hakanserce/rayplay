@@ -6,6 +6,8 @@ use anyhow::Result;
 use clap::Parser;
 use rayplay_network::{QuicListener, QuicVideoTransport};
 use rayplay_video::encoder::{Bitrate, EncoderConfig};
+#[cfg(any(target_os = "windows", test))]
+use rayplay_video::{capture::ScreenCapturer, encoder::VideoEncoder};
 
 /// Command-line arguments for the `rayhost` binary.
 #[derive(Parser, Debug, Clone)]
@@ -125,36 +127,35 @@ pub async fn serve(
 
 // ── Streaming pipeline ────────────────────────────────────────────────────────
 
-/// Drives the capture → encode → send loop on a connected transport.
+/// Drives the encode-then-send loop given pre-built pipeline components.
 ///
-/// The actual implementation lives behind `#[cfg(target_os = "windows")]`
-/// because both screen capture (DXGI) and encoding (NVENC) are Windows-only.
-/// On other platforms this function returns an error immediately so that the
-/// macOS/Linux CI build stays green and coverage stays above the threshold.
-#[cfg(target_os = "windows")]
-async fn stream(
+/// Runs the capture+encode work on a dedicated blocking thread (NVENC is
+/// synchronous) and forwards [`rayplay_video::EncodedPacket`]s to the connected
+/// client via `transport` until `shutdown` fires.
+///
+/// Keeping the pipeline injectable makes this function testable on all platforms
+/// without requiring the Windows capture/NVENC stack.
+///
+/// # Errors
+///
+/// Returns an error if capture, encoding, or network transmission fails.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) async fn stream_with_pipeline(
     mut transport: QuicVideoTransport,
-    config: HostConfig,
+    capturer: Box<dyn ScreenCapturer>,
+    mut encoder: Box<dyn VideoEncoder>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
-    use rayplay_video::{
-        CaptureConfig, EncodedPacket, capture::CaptureError, create_capturer, create_encoder,
-        frame::RawFrame,
-    };
+    use rayplay_video::{EncodedPacket, capture::CaptureError, frame::RawFrame};
 
-    let cap_config = CaptureConfig {
-        target_fps: config.encoder_config.fps,
-        acquire_timeout_ms: 100,
-    };
+    /// Backpressure buffer between the blocking encode thread and the async send loop.
+    ///
+    /// Four frames in flight balances latency (small buffer) against encode-thread
+    /// stalls (buffer large enough to absorb one network hiccup).
+    const ENCODE_CHANNEL_CAPACITY: usize = 4;
 
-    let capturer = create_capturer(cap_config).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let (cap_width, cap_height) = capturer.resolution();
-    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-        .with_bitrate(config.encoder_config.bitrate);
-    let mut encoder = create_encoder(enc_config).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    // Channel from the blocking encode thread to the async send loop.
-    let (packet_tx, mut packet_rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
+    let (packet_tx, mut packet_rx) =
+        tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(ENCODE_CHANNEL_CAPACITY);
     let session_start = std::time::Instant::now();
 
     // Capture and encode on a dedicated blocking thread — NVENC is synchronous.
@@ -162,7 +163,12 @@ async fn stream(
         loop {
             let frame = match capturer.capture_frame() {
                 Ok(f) => f,
-                Err(CaptureError::Timeout(_)) => continue,
+                Err(CaptureError::Timeout(_)) => {
+                    if packet_tx.is_closed() {
+                        return;
+                    }
+                    continue;
+                }
                 Err(e) => {
                     let _ = packet_tx.blocking_send(Err(anyhow::anyhow!("{e}")));
                     return;
@@ -175,7 +181,8 @@ async fn stream(
             match encoder.encode(&raw) {
                 Ok(Some(pkt)) => {
                     if packet_tx.blocking_send(Ok(pkt)).is_err() {
-                        return; // receiver dropped — shutdown in progress
+                        tracing::debug!("encode channel closed, stream is shutting down");
+                        return;
                     }
                 }
                 Ok(None) => {} // encoder buffering, wait for next frame
@@ -201,6 +208,11 @@ async fn stream(
                             .send_video(&p)
                             .await
                             .map_err(|e| anyhow::anyhow!("{e}"))?;
+                        // Yield after each send so the tokio I/O driver can
+                        // transmit the queued datagram before processing the
+                        // next packet, preventing burst-sends from filling
+                        // quinn's internal send buffer.
+                        tokio::task::yield_now().await;
                     }
                     Some(Err(e)) => return Err(e),
                     None => break, // encode thread exited
@@ -210,6 +222,30 @@ async fn stream(
     }
 
     Ok(())
+}
+
+/// Resolves platform-specific capture and encoder then calls
+/// [`stream_with_pipeline`].
+#[cfg(target_os = "windows")]
+async fn stream(
+    transport: QuicVideoTransport,
+    config: HostConfig,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> Result<()> {
+    use rayplay_video::{CaptureConfig, create_capturer, create_encoder};
+
+    let cap_config = CaptureConfig {
+        target_fps: config.encoder_config.fps,
+        acquire_timeout_ms: 100,
+    };
+
+    let capturer = create_capturer(cap_config).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (cap_width, cap_height) = capturer.resolution();
+    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
+        .with_bitrate(config.encoder_config.bitrate);
+    let encoder = create_encoder(enc_config).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    stream_with_pipeline(transport, capturer, encoder, shutdown).await
 }
 
 // The Windows version is `async`; keep the same signature here.
@@ -229,9 +265,19 @@ async fn stream(
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{
+        net::SocketAddr,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Instant,
+    };
 
     use rayplay_network::QuicVideoTransport;
+    use rayplay_video::{
+        capture::{CaptureError, CapturedFrame, ScreenCapturer},
+        encoder::{EncoderConfig, VideoEncoder, VideoError},
+        frame::RawFrame,
+        packet::EncodedPacket,
+    };
 
     use super::*;
 
@@ -250,6 +296,86 @@ mod tests {
         let (listener, _cert) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
         (listener, addr)
+    }
+
+    // ── Stub pipeline components ──────────────────────────────────────────────
+
+    /// Produces `n` frames then returns [`CaptureError::Timeout`] indefinitely.
+    struct StubCapturer {
+        frames_remaining: AtomicUsize,
+        width: u32,
+        height: u32,
+    }
+
+    impl StubCapturer {
+        fn new(n: usize, width: u32, height: u32) -> Self {
+            Self {
+                frames_remaining: AtomicUsize::new(n),
+                width,
+                height,
+            }
+        }
+    }
+
+    impl ScreenCapturer for StubCapturer {
+        fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+            if self.frames_remaining.load(Ordering::SeqCst) == 0 {
+                // Park briefly to avoid spinning hot after exhaustion.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                return Err(CaptureError::Timeout(std::time::Duration::from_millis(5)));
+            }
+            // Brief pause so the async send loop's select! can reach a pending
+            // state between packets, giving tokio's I/O driver time to transmit
+            // the QUIC datagrams before the next packet arrives.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            self.frames_remaining.fetch_sub(1, Ordering::SeqCst);
+            Ok(CapturedFrame {
+                width: self.width,
+                height: self.height,
+                stride: self.width * 4,
+                data: vec![0u8; self.width as usize * self.height as usize * 4],
+                timestamp: Instant::now(),
+            })
+        }
+
+        fn resolution(&self) -> (u32, u32) {
+            (self.width, self.height)
+        }
+    }
+
+    /// Turns each frame into an `EncodedPacket` whose data is `[frame_number]`.
+    struct StubEncoder {
+        config: EncoderConfig,
+        frame_count: usize,
+    }
+
+    impl StubEncoder {
+        fn new(config: EncoderConfig) -> Self {
+            Self {
+                config,
+                frame_count: 0,
+            }
+        }
+    }
+
+    impl VideoEncoder for StubEncoder {
+        fn encode(&mut self, frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+            self.frame_count += 1;
+            Ok(Some(EncodedPacket::new(
+                vec![u8::try_from(self.frame_count).expect("frame count fits in u8")],
+                self.frame_count == 1,
+                frame.timestamp_us,
+                16_667,
+            )))
+        }
+
+        fn flush(&mut self) -> Result<Vec<EncodedPacket>, VideoError> {
+            Ok(vec![])
+        }
+
+        fn config(&self) -> &EncoderConfig {
+            &self.config
+        }
     }
 
     // ── HostArgs defaults ─────────────────────────────────────────────────────
@@ -450,6 +576,255 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         tx.send(()).unwrap();
         assert!(serve(listener, default_config(), rx).await.is_ok());
+    }
+
+    // ── Layer 1: QUIC transport only (server → client direction) ─────────────
+    //
+    // No encode thread, no stream_with_pipeline. Directly call send_video /
+    // recv_video to verify the QUIC layer works server→client.
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer1_quic_server_sends_one_packet_to_client() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut transport = listener.accept().await.unwrap();
+            let pkt = EncodedPacket::new(vec![42u8], true, 0, 16_667);
+            transport.send_video(&pkt).await.unwrap();
+            // Yield so quinn flushes the datagram before dropping the connection.
+            tokio::task::yield_now().await;
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let pkt = client.recv_video().await.expect("receive packet");
+        assert_eq!(pkt.data, vec![42u8]);
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer1_quic_server_sends_three_packets_to_client() {
+        const N: usize = 3;
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut transport = listener.accept().await.unwrap();
+            for i in 1u8..=N as u8 {
+                let pkt = EncodedPacket::new(vec![i], i == 1, 0, 16_667);
+                transport.send_video(&pkt).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        for i in 1u8..=N as u8 {
+            let pkt = client.recv_video().await.expect("receive packet");
+            assert_eq!(pkt.data, vec![i]);
+        }
+        server_task.await.unwrap();
+    }
+
+    // ── Layer 2: encode thread → mpsc channel (no QUIC) ──────────────────────
+    //
+    // Runs the blocking encode thread with StubCapturer + StubEncoder and reads
+    // from the channel directly, without any network involvement.
+
+    #[tokio::test]
+    async fn test_layer2_encode_thread_delivers_n_packets_to_channel() {
+        use rayplay_video::{capture::CaptureError, frame::RawFrame};
+
+        const N: usize = 3;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
+        let session_start = std::time::Instant::now();
+
+        let capturer = Box::new(StubCapturer::new(N, 2, 2));
+        let mut encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+
+        // Mirror the encode loop from stream_with_pipeline exactly.
+        tokio::task::spawn_blocking(move || {
+            loop {
+                let frame = match capturer.capture_frame() {
+                    Ok(f) => f,
+                    Err(CaptureError::Timeout(_)) => {
+                        if tx.is_closed() {
+                            return;
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        let _ = tx.blocking_send(Err(anyhow::anyhow!("{e}")));
+                        return;
+                    }
+                };
+                let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                let raw = RawFrame::new(frame.data, frame.width, frame.height, frame.stride, ts);
+                match encoder.encode(&raw) {
+                    Ok(Some(pkt)) => {
+                        if tx.blocking_send(Ok(pkt)).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        let _ = tx.blocking_send(Err(anyhow::anyhow!("{e}")));
+                        return;
+                    }
+                }
+            }
+        });
+
+        for i in 1u8..=N as u8 {
+            let pkt = rx
+                .recv()
+                .await
+                .expect("channel open")
+                .expect("no encode error");
+            assert_eq!(pkt.data, vec![i]);
+        }
+        // rx is dropped here — encode thread sees is_closed() and exits.
+    }
+
+    // ── Layer 3: encode thread → channel → QUIC (no stream_with_pipeline) ────
+    //
+    // Wires the encode thread and QUIC send loop manually — no select!, no
+    // shutdown channel — to check that the encode→network path works before
+    // adding stream_with_pipeline's concurrency logic.
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer3_encode_to_quic_delivers_n_packets() {
+        use rayplay_video::{capture::CaptureError, frame::RawFrame};
+
+        const N: usize = 3;
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut transport = listener.accept().await.unwrap();
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
+            let session_start = std::time::Instant::now();
+            let capturer = Box::new(StubCapturer::new(N, 2, 2));
+            let mut encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+
+            tokio::task::spawn_blocking(move || {
+                loop {
+                    let frame = match capturer.capture_frame() {
+                        Ok(f) => f,
+                        Err(CaptureError::Timeout(_)) => {
+                            if tx.is_closed() {
+                                return;
+                            }
+                            continue;
+                        }
+                        Err(e) => {
+                            let _ = tx.blocking_send(Err(anyhow::anyhow!("{e}")));
+                            return;
+                        }
+                    };
+                    let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                    let raw =
+                        RawFrame::new(frame.data, frame.width, frame.height, frame.stride, ts);
+                    match encoder.encode(&raw) {
+                        Ok(Some(pkt)) => {
+                            if tx.blocking_send(Ok(pkt)).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            let _ = tx.blocking_send(Err(anyhow::anyhow!("{e}")));
+                            return;
+                        }
+                    }
+                }
+            });
+
+            // Forward exactly N packets; no select!, no shutdown channel.
+            for _ in 0..N {
+                let pkt = rx.recv().await.unwrap().unwrap();
+                transport.send_video(&pkt).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        for i in 1u8..=N as u8 {
+            let pkt = client.recv_video().await.expect("receive packet");
+            assert_eq!(pkt.data, vec![i]);
+        }
+        server_task.await.unwrap();
+    }
+
+    // ── Layer 4: stream_with_pipeline (full abstraction + shutdown) ───────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer4_stream_with_pipeline_shutdown_before_first_frame() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            let transport = listener.accept().await.unwrap();
+            let capturer = Box::new(StubCapturer::new(0, 2, 2));
+            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        });
+
+        QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        tokio::task::yield_now().await;
+        shutdown_tx.send(()).unwrap();
+        assert!(server_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer4_stream_with_pipeline_one_frame_received() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            let transport = listener.accept().await.unwrap();
+            let capturer = Box::new(StubCapturer::new(1, 2, 2));
+            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let pkt = client.recv_video().await.expect("receive first packet");
+        assert_eq!(pkt.data, vec![1u8]);
+
+        shutdown_tx.send(()).unwrap();
+        assert!(server_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_layer4_stream_with_pipeline_three_frames_received_in_order() {
+        const N: usize = 3;
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            let transport = listener.accept().await.unwrap();
+            let capturer = Box::new(StubCapturer::new(N, 2, 2));
+            let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+            stream_with_pipeline(transport, capturer, encoder, shutdown_rx).await
+        });
+
+        let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        for i in 1u8..=N as u8 {
+            let pkt = client.recv_video().await.expect("receive packet");
+            assert_eq!(pkt.data, vec![i]);
+        }
+
+        shutdown_tx.send(()).unwrap();
+        assert!(server_task.await.unwrap().is_ok());
     }
 
     // ── stream (non-Windows stub) ─────────────────────────────────────────────
