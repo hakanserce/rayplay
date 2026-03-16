@@ -144,6 +144,10 @@ impl AppState {
         if let Err(RenderError::SurfaceLost) = renderer.present_frame(&frame)
             && let Some(window) = &self.window
         {
+            // Reconfigure the swap chain to the current window size.
+            // wgpu::Surface::configure returns () — if the device is lost,
+            // the next present_frame call will surface the error rather than
+            // this reconfigure step.
             renderer.resize(window.inner_size());
         }
     }

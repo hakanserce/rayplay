@@ -44,7 +44,14 @@ impl WgpuRenderer {
     pub async fn new(window: Arc<Window>) -> Result<Self, RenderError> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            // Prefer the native backend for the current platform.  On macOS
+            // this pins to Metal rather than letting wgpu probe Vulkan/DX12
+            // fallbacks that are unavailable anyway.
+            backends: if cfg!(target_os = "macos") {
+                wgpu::Backends::METAL
+            } else {
+                wgpu::Backends::all()
+            },
             ..Default::default()
         });
         let surface =

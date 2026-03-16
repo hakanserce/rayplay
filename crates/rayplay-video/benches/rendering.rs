@@ -1,14 +1,17 @@
 //! Benchmarks for the client frame rendering pipeline (UC-005).
 //!
-//! Measures CPU-side rendering path components (frame construction, NV12 UV
-//! offset arithmetic) that run unconditionally.  GPU upload + present
-//! benchmarks require a Metal adapter and run only with
-//! `--features hw-render-tests`.
+//! Measures two categories of cost:
+//!
+//! * **CPU-side**: frame construction and NV12 UV-offset arithmetic —
+//!   always run, no GPU required.
+//! * **GPU present latency** (`present_frame`): texture upload + command
+//!   encoding + queue submit + GPU drain, measured against the offscreen
+//!   render target.  Validates the AC-2 requirement of <2 ms per frame.
 
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use rayplay_video::{DecodedFrame, PixelFormat};
+use rayplay_video::{DecodedFrame, PixelFormat, Renderer, WgpuRenderer};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -104,11 +107,76 @@ fn bench_expected_data_size(c: &mut Criterion) {
     group.finish();
 }
 
+// ── present_frame latency (AC-2: <2 ms) ──────────────────────────────────────
+
+/// Creates a headless `wgpu` device backed by the default high-performance
+/// adapter (Metal on macOS).  No window or display server is required.
+fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+    pollster::block_on(async {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("no GPU adapter available");
+        adapter
+            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .await
+            .expect("device creation failed")
+    })
+}
+
+/// Measures `present_frame` CPU latency: texture staging-upload + command
+/// encoding + queue submit.  This is the time the calling thread is blocked
+/// before the next frame can be started — the dominant component of AC-2's
+/// <2 ms target (GPU execution is pipelined and overlaps with the CPU path).
+fn bench_present_frame_bgra(c: &mut Criterion) {
+    let mut group = c.benchmark_group("present_frame");
+
+    for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
+        let bytes = (w * h * 4) as u64;
+        group.throughput(Throughput::Bytes(bytes));
+        group.bench_with_input(BenchmarkId::new("bgra", label), &(w, h), |b, &(w, h)| {
+            let (device, queue) = create_headless_device();
+            let mut renderer = WgpuRenderer::new_offscreen(device, queue, w, h);
+            let frame = make_bgra_frame(w, h);
+            b.iter(|| renderer.present_frame(black_box(&frame)).unwrap());
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_present_frame_nv12(c: &mut Criterion) {
+    let mut group = c.benchmark_group("present_frame");
+
+    for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
+        let bytes = (w * h * 3 / 2) as u64;
+        group.throughput(Throughput::Bytes(bytes));
+        group.bench_with_input(BenchmarkId::new("nv12", label), &(w, h), |b, &(w, h)| {
+            let (device, queue) = create_headless_device();
+            let mut renderer = WgpuRenderer::new_offscreen(device, queue, w, h);
+            let frame = make_nv12_frame(w, h);
+            b.iter(|| renderer.present_frame(black_box(&frame)).unwrap());
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_frame_alloc_bgra,
     bench_frame_alloc_nv12,
     bench_nv12_uv_offset,
     bench_expected_data_size,
+    bench_present_frame_bgra,
+    bench_present_frame_nv12,
 );
 criterion_main!(benches);
