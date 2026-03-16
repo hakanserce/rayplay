@@ -55,7 +55,7 @@ fn main() -> Result<()> {
         rt.block_on(async move {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Ctrl+C received, disconnecting");
+                    tracing::info!("Ctrl+C received — abandoning in-flight connection");
                     std::process::exit(0);
                 }
                 result = client::connect(config, frame_tx, shutdown_rx) => {
@@ -68,9 +68,9 @@ fn main() -> Result<()> {
     });
 
     // Main thread: runs the winit event loop until the window is closed.
-    RenderWindow::new("RayView", width, height)
-        .run(frame_rx)
-        .ok();
+    if let Err(e) = RenderWindow::new("RayView", width, height).run(frame_rx) {
+        tracing::error!(error = %e, "Render window error");
+    }
 
     // Window closed — signal the networking thread to stop, then wait for it.
     let _ = shutdown_tx.send(());

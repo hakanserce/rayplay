@@ -110,21 +110,23 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_handler_calls_on_connect_and_propagates_result() {
+    async fn test_connect_with_handler_calls_on_connect_on_success() {
         let (listener, cert_bytes, addr) = loopback_listener();
         let _server = tokio::spawn(async move { listener.accept().await });
         let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        assert!(
+            connect_with_handler(addr, cert_bytes, rx, |_t, _s| async { Ok(()) })
+                .await
+                .is_ok()
+        );
+    }
 
-        // Success path.
-        let ok =
-            connect_with_handler(addr, cert_bytes.clone(), rx, |_t, _s| async { Ok(()) }).await;
-        assert!(ok.is_ok());
-
-        // Handler error propagates.
-        let (listener2, cert2, addr2) = loopback_listener();
-        let _server2 = tokio::spawn(async move { listener2.accept().await });
-        let (_tx2, rx2) = tokio::sync::oneshot::channel::<()>();
-        let err = connect_with_handler(addr2, cert2, rx2, |_t, _s| async {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_connect_with_handler_propagates_handler_error() {
+        let (listener, cert_bytes, addr) = loopback_listener();
+        let _server = tokio::spawn(async move { listener.accept().await });
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let err = connect_with_handler(addr, cert_bytes, rx, |_t, _s| async {
             Err(anyhow::anyhow!("handler failed"))
         })
         .await
