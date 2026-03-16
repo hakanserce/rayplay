@@ -86,7 +86,7 @@ impl EncoderConfig {
     }
 }
 
-/// Errors produced by video encoder operations.
+/// Errors produced by video encoder and decoder operations.
 #[derive(Debug, Error)]
 pub enum VideoError {
     #[error("encoder session not initialized")]
@@ -100,6 +100,12 @@ pub enum VideoError {
 
     #[error("encoding failed: {reason}")]
     EncodingFailed { reason: String },
+
+    #[error("decoding failed: {reason}")]
+    DecodingFailed { reason: String },
+
+    #[error("corrupt packet: {reason}")]
+    CorruptPacket { reason: String },
 }
 
 /// Trait for hardware or software video encoders.
@@ -238,6 +244,24 @@ mod tests {
         }
         .to_string();
         assert!(msg.contains("test"));
+    }
+
+    #[test]
+    fn test_video_error_decoding_failed_message() {
+        let msg = VideoError::DecodingFailed {
+            reason: "bad session".to_string(),
+        }
+        .to_string();
+        assert!(msg.contains("bad session"));
+    }
+
+    #[test]
+    fn test_video_error_corrupt_packet_message() {
+        let msg = VideoError::CorruptPacket {
+            reason: "truncated NAL".to_string(),
+        }
+        .to_string();
+        assert!(msg.contains("truncated NAL"));
     }
 
     // ── compute_auto_bitrate (private, tested via Bitrate::Auto) ──────────────

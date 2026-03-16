@@ -18,10 +18,19 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
 ] }
 
+[features]
+## Enable hardware-accelerated codec tests (VtDecoder on Apple Silicon, NvencEncoder on Windows).
+## Requires appropriate hardware. Only enabled on self-hosted CI runners.
+hw-codec-tests = []
+
 [dev-dependencies]
 criterion.workspace  = true
 serde_json.workspace = true
 
 [[bench]]
 name = "encoding"
+harness = false
+
+[[bench]]
+name = "decoding"
 harness = false
