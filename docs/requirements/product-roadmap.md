@@ -65,7 +65,7 @@ multi-monitor, gamepad, Android client, and codec flexibility.
 | UC-019 | Multi-Monitor Selection | P2 | M |
 | UC-020 | Gamepad Input Support | P2 | M |
 | UC-021 | Client-Side Cursor Rendering | P2 | M |
-| UC-022 | Android Client | P2 | L |
+| UC-022 | Android Client | P1 | L |
 | UC-023 | Additional Codec Support | P2 | M |
 | UC-024 | Configuration Persistence | P2 | S |
 
@@ -83,6 +83,7 @@ The following ADRs must be resolved before implementing the corresponding UCs:
 | ADR-004 | Video codec FFI approach (NVENC/VideoToolbox bindings) | UC-002, UC-004 |
 | ADR-005 | Window/rendering framework | UC-005, UC-022 |
 | ADR-006 | Input capture mechanism per platform | UC-009, UC-010, UC-011 |
+| ADR-007 | Security model (encryption, authentication, trust) | UC-016 |
 
 ---
 
