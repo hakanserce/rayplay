@@ -2,6 +2,8 @@
 
 mod client;
 
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use clap::Parser;
 use client::{ClientArgs, ClientConfig};
@@ -47,6 +49,11 @@ fn main() -> Result<()> {
         crossbeam_channel::bounded::<DecodedFrame>(DEFAULT_FRAME_CHANNEL_CAPACITY);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
+    // Wrap in Arc<Mutex<Option>> so both Ctrl+C (net thread) and window-close
+    // (main thread) can fire the shutdown signal exactly once.
+    let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
+    let ctrlc_shutdown = Arc::clone(&shutdown);
+
     // Spawn a background OS thread that owns the tokio runtime and QUIC
     // connection.  The winit event loop must run on the main thread (AppKit
     // requirement on macOS), so networking runs on a dedicated thread instead.
@@ -55,8 +62,11 @@ fn main() -> Result<()> {
         rt.block_on(async move {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Ctrl+C received — abandoning in-flight connection");
-                    std::process::exit(0);
+                    tracing::info!("Ctrl+C received, disconnecting");
+                    if let Some(tx) = ctrlc_shutdown.lock().expect("shutdown lock").take() {
+                        let _ = tx.send(());
+                    }
+                    // connect future is cancelled here; quinn sends CONNECTION_CLOSE via Drop.
                 }
                 result = client::connect(config, frame_tx, shutdown_rx) => {
                     if let Err(e) = result {
@@ -68,15 +78,18 @@ fn main() -> Result<()> {
     });
 
     // Main thread: runs the winit event loop until the window is closed.
-    if let Err(e) = RenderWindow::new("RayView", width, height).run(frame_rx) {
+    let render_result = RenderWindow::new("RayView", width, height).run(frame_rx);
+    if let Err(ref e) = render_result {
         tracing::error!(error = %e, "Render window error");
     }
 
     // Window closed — signal the networking thread to stop, then wait for it.
-    let _ = shutdown_tx.send(());
+    if let Some(tx) = shutdown.lock().expect("shutdown lock").take() {
+        let _ = tx.send(());
+    }
     let _ = net_thread.join();
 
-    Ok(())
+    render_result.map_err(|e| anyhow::anyhow!("render window: {e}"))
 }
 
 // llvm-cov:excl-stop

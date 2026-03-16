@@ -15,7 +15,6 @@ path = "src/client_main.rs"
 anyhow.workspace             = true
 clap                         = { workspace = true, features = ["derive"] }
 crossbeam-channel.workspace  = true
-rustls                       = { version = "0.23", default-features = false, features = ["ring"] }
 tokio.workspace              = true
 tracing.workspace            = true
 tracing-subscriber.workspace = true

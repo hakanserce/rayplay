@@ -4,7 +4,6 @@ use std::{future::Future, net::SocketAddr};
 
 use anyhow::Result;
 use rayplay_network::QuicVideoTransport;
-use rustls::pki_types::CertificateDer;
 
 /// Connects to a `RayPlay` host and calls `on_connect` with the established transport.
 ///
@@ -24,11 +23,9 @@ where
     F: FnOnce(QuicVideoTransport, tokio::sync::oneshot::Receiver<()>) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let cert = CertificateDer::from(server_cert);
-
     let connect_result = tokio::select! {
         _ = &mut shutdown => None,
-        result = QuicVideoTransport::connect(server_addr, cert) => Some(result),
+        result = QuicVideoTransport::connect(server_addr, server_cert) => Some(result),
     };
 
     match connect_result {

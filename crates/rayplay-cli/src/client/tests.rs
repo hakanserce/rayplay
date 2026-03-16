@@ -15,9 +15,7 @@ use super::{
 async fn test_run_receive_loop_exits_on_shutdown() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let _server = tokio::spawn(async move { listener.accept().await });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
 
     let (frame_tx, _rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -42,9 +40,7 @@ async fn test_run_receive_loop_exits_on_shutdown() {
 async fn test_run_receive_loop_transport_error_propagates() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let server = server_task.await.unwrap();
 
     drop(server); // dropping closes the QUIC connection
@@ -72,9 +68,7 @@ async fn test_run_receive_loop_transport_error_propagates() {
 async fn test_run_receive_loop_forwards_decoded_frame() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
     server
@@ -110,9 +104,7 @@ async fn test_run_receive_loop_forwards_decoded_frame() {
 async fn test_run_receive_loop_buffering_none_continues() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
     server
@@ -141,9 +133,7 @@ async fn test_run_receive_loop_buffering_none_continues() {
 async fn test_run_receive_loop_decode_error_is_skipped() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
     server
@@ -173,9 +163,7 @@ async fn test_run_receive_loop_decode_error_is_skipped() {
 async fn test_run_receive_loop_exits_when_channel_disconnected() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
     server
@@ -206,9 +194,7 @@ async fn test_run_receive_loop_exits_when_channel_disconnected() {
 async fn test_run_receive_loop_drops_frame_when_channel_full() {
     let (listener, cert_bytes, addr) = loopback_listener();
     let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
-    let transport = QuicVideoTransport::connect(addr, cert_bytes.into())
-        .await
-        .unwrap();
+    let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
     let (frame_tx, frame_rx) = crossbeam_channel::bounded::<DecodedFrame>(1);

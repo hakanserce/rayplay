@@ -1850,7 +1850,6 @@ dependencies = [
  "crossbeam-channel",
  "rayplay-network",
  "rayplay-video",
- "rustls",
  "tempfile",
  "tokio",
  "tracing",

@@ -58,5 +58,5 @@ pub(crate) fn loopback_listener() -> (QuicListener, Vec<u8>, SocketAddr) {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let (listener, cert) = QuicVideoTransport::listen(bind).unwrap();
     let addr = listener.local_addr().unwrap();
-    (listener, cert.as_ref().to_vec(), addr)
+    (listener, cert, addr)
 }

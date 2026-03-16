@@ -30,9 +30,10 @@ pub struct ClientArgs {
 
     /// Path to the host's DER-encoded TLS certificate.
     ///
-    /// Required until the SPAKE2 pairing flow (ADR-007) is implemented.
+    /// Defaults to `~/.config/rayview/server.der`.  Required until the
+    /// SPAKE2 pairing flow (ADR-007) replaces manual cert distribution.
     #[arg(long)]
-    pub cert: PathBuf,
+    pub cert: Option<PathBuf>,
 }
 
 /// Resolved client configuration derived from [`ClientArgs`].
@@ -48,6 +49,14 @@ pub struct ClientConfig {
     pub height: u32,
 }
 
+/// Returns the default certificate path: `$HOME/.config/rayview/server.der`.
+fn default_cert_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/rayview/server.der")
+}
+
 impl ClientConfig {
     /// Builds a [`ClientConfig`] from the parsed CLI arguments.
     ///
@@ -61,9 +70,10 @@ impl ClientConfig {
                 args.host
             )
         })?;
+        let cert_path = args.cert.clone().unwrap_or_else(default_cert_path);
         Ok(Self {
             server_addr: SocketAddr::new(host_ip, args.port),
-            cert_path: args.cert.clone(),
+            cert_path,
             width: args.width,
             height: args.height,
         })
@@ -98,21 +108,27 @@ mod tests {
             port: 5000,
             width: 1280,
             height: 720,
-            cert: "/tmp/cert.der".into(),
+            cert: None,
         }
     }
 
     #[test]
     fn test_client_args_default_port() {
-        assert_eq!(
-            ClientArgs::parse_from(["rayview", "127.0.0.1", "--cert", "/c"]).port,
-            5000
+        assert_eq!(ClientArgs::parse_from(["rayview", "127.0.0.1"]).port, 5000);
+    }
+
+    #[test]
+    fn test_client_args_default_cert_is_none() {
+        assert!(
+            ClientArgs::parse_from(["rayview", "127.0.0.1"])
+                .cert
+                .is_none()
         );
     }
 
     #[test]
     fn test_client_args_default_dimensions() {
-        let args = ClientArgs::parse_from(["rayview", "127.0.0.1", "--cert", "/c"]);
+        let args = ClientArgs::parse_from(["rayview", "127.0.0.1"]);
         assert_eq!(args.width, 1280);
         assert_eq!(args.height, 720);
     }
@@ -121,11 +137,16 @@ mod tests {
     fn test_client_args_custom_port_and_dimensions() {
         let args = ClientArgs::parse_from([
             "rayview", "10.0.0.1", "--port", "6000", "--width", "1920", "--height", "1080",
-            "--cert", "/c",
         ]);
         assert_eq!(args.port, 6000);
         assert_eq!(args.width, 1920);
         assert_eq!(args.height, 1080);
+    }
+
+    #[test]
+    fn test_from_args_uses_default_cert_when_none_provided() {
+        let config = ClientConfig::from_args(&dummy_args("127.0.0.1")).unwrap();
+        assert!(config.cert_path.ends_with(".config/rayview/server.der"));
     }
 
     #[test]
@@ -147,7 +168,7 @@ mod tests {
         let mut args = dummy_args("127.0.0.1");
         args.width = 1920;
         args.height = 1080;
-        args.cert = "/path/to/cert.der".into();
+        args.cert = Some("/path/to/cert.der".into());
         let config = ClientConfig::from_args(&args).unwrap();
         assert_eq!(config.width, 1920);
         assert_eq!(config.height, 1080);
