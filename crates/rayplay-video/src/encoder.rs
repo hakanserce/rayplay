@@ -106,6 +106,34 @@ pub enum VideoError {
 
     #[error("corrupt packet: {reason}")]
     CorruptPacket { reason: String },
+
+    #[error("video encoding is not supported on this platform")]
+    UnsupportedPlatform,
+}
+
+/// Returns the platform-appropriate hardware encoder.
+///
+/// On Windows, returns an [`NvencEncoder`](crate::nvenc::NvencEncoder) backed
+/// by NVENC.  On other platforms returns [`VideoError::UnsupportedPlatform`].
+///
+/// # Errors
+///
+/// Returns [`VideoError::UnsupportedPlatform`] on non-Windows, or
+/// [`VideoError::EncodingFailed`] if the NVENC session cannot be opened.
+// On Windows the config is consumed by NvencEncoder::new; the non-Windows branch
+// must accept the same signature.
+#[allow(clippy::needless_pass_by_value)]
+pub fn create_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::nvenc::NvencEncoder;
+        NvencEncoder::new(config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = config;
+        Err(VideoError::UnsupportedPlatform)
+    }
 }
 
 /// Trait for hardware or software video encoders.
@@ -265,6 +293,19 @@ mod tests {
     }
 
     // ── compute_auto_bitrate (private, tested via Bitrate::Auto) ──────────────
+
+    #[test]
+    fn test_video_error_unsupported_platform_display() {
+        let msg = VideoError::UnsupportedPlatform.to_string();
+        assert!(msg.contains("not supported"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_create_encoder_unsupported_on_non_windows() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60));
+        assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+    }
 
     #[test]
     fn test_auto_bitrate_scales_with_fps() {
