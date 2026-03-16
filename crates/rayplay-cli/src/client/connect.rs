@@ -79,12 +79,12 @@ where
             }
             Err(e) => {
                 if token.is_cancelled() {
-                    return Ok(()); // coverage:excl-line:
+                    return Ok(());
                 }
                 tracing::info!(
                     error = %e,
                     backoff_ms,
-                    "Connection failed, retrying" // coverage:excl-line:
+                    "Connection failed, retrying"
                 );
             }
         }

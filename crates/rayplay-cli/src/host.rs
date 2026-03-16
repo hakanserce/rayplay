@@ -1195,6 +1195,27 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move { listener.accept().await });
+        let transport = QuicVideoTransport::connect(addr, cert_der)
+            .await
+            .expect("connect");
+        let token = CancellationToken::new();
+        let result = stream(transport, default_config(), token).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only supported on Windows")
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_serve_continues_after_non_windows_stream_error() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let addr = listener.local_addr().unwrap();
         let token = CancellationToken::new();
         let token2 = token.clone();
         let task = tokio::spawn(serve(listener, default_config(), token));

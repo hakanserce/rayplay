@@ -22,6 +22,10 @@ tracing-subscriber.workspace = true
 rayplay-network              = { path = "../rayplay-network" }
 rayplay-video                = { path = "../rayplay-video" }
 
+[[bench]]
+name    = "e2e_latency"
+harness = false
+
 [dev-dependencies]
 criterion.workspace = true
 tempfile            = "3"
