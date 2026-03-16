@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-thiserror.workspace = true
-tokio.workspace     = true
-tracing.workspace   = true
-serde.workspace     = true
+thiserror.workspace         = true
+tokio.workspace             = true
+tracing.workspace           = true
+serde.workspace             = true
+winit.workspace             = true
+wgpu.workspace              = true
+crossbeam-channel.workspace = true
+pollster.workspace          = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
@@ -23,6 +27,10 @@ windows = { version = "0.58", features = [
 ## Requires appropriate hardware. Only enabled on self-hosted CI runners.
 hw-codec-tests = []
 
+## Enable rendering tests that require a GPU and a window handle.
+## On standard CI (GitHub Actions macOS), the event loop cannot be driven headlessly.
+hw-render-tests = []
+
 [dev-dependencies]
 criterion.workspace  = true
 serde_json.workspace = true
@@ -33,4 +41,8 @@ harness = false
 
 [[bench]]
 name = "decoding"
+harness = false
+
+[[bench]]
+name = "rendering"
 harness = false
