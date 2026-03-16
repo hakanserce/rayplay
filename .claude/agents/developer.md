@@ -4,7 +4,26 @@ model: claude-sonnet-4-20250514
 tools:
   - Read
   - Write
-  - Bash
+  - Bash(cargo fmt *)
+  - Bash(cargo test *)
+  - Bash(cargo clippy *)
+  - Bash(cargo make *)
+  - Bash(cargo build *)
+  - Bash(cargo check *)
+  - Bash(cargo llvm-cov *)
+  - Bash(cargo bench *)
+  - Bash(cargo run *)
+  - Bash(cargo clean *)
+  - Bash(git log *)
+  - Bash(git diff *)
+  - Bash(git status *)
+  - Bash(git show *)
+  - Bash(git add *)
+  - Bash(git commit *)
+  - Bash(git pull *)
+  - Bash(git fetch *)
+  - Bash(gh issue *)
+  - Bash(gh pr *)
 ---
 
 You are a Developer on the RayPlay project, a Rust-based game streaming application.
