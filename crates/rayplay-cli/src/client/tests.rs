@@ -8,7 +8,7 @@ use rayplay_video::{DecodedFrame, PixelFormat, packet::EncodedPacket};
 
 use super::{
     receive::run_receive_loop,
-    test_helper::{NullDecoder, loopback_listener},
+    test_helper::{NullDecoder, SkipBadDecoder, loopback_listener},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,26 +136,31 @@ async fn test_run_receive_loop_decode_error_is_skipped() {
     let transport = QuicVideoTransport::connect(addr, cert_bytes).await.unwrap();
     let mut server = server_task.await.unwrap();
 
+    // First packet triggers a decode error; second packet produces a frame.
+    // Receiving the second frame proves the loop continued after the error.
     server
         .send_video(&EncodedPacket::new(vec![0xDE, 0xAD], false, 0, 0))
         .await
         .unwrap();
+    server
+        .send_video(&EncodedPacket::new(vec![1u8], true, 0, 0))
+        .await
+        .unwrap();
 
-    let (frame_tx, _rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
+    let (frame_tx, frame_rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let task = tokio::spawn(run_receive_loop(
         transport,
-        Box::new(NullDecoder {
-            emit: false,
-            fail: true,
-        }),
+        Box::new(SkipBadDecoder),
         frame_tx,
         shutdown_rx,
     ));
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait for the second packet's frame — proves the error was skipped.
+    frame_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
     shutdown_tx.send(()).unwrap();
-    // Decode error must be skipped — loop returns Ok, not Err.
     assert!(task.await.unwrap().is_ok());
 }
 

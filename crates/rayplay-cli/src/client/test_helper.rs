@@ -50,6 +50,57 @@ impl VideoDecoder for NullDecoder {
     }
 }
 
+/// Decoder that returns [`VideoError::CorruptPacket`] for packets whose first byte is `0xDE`
+/// and emits a 1×1 frame for all other packets.
+///
+/// Used to verify that the receive loop skips decode errors and continues running.
+pub(crate) struct SkipBadDecoder;
+
+impl VideoDecoder for SkipBadDecoder {
+    fn decode(&mut self, packet: &EncodedPacket) -> Result<Option<DecodedFrame>, VideoError> {
+        if packet.data.first() == Some(&0xDE) {
+            return Err(VideoError::CorruptPacket {
+                reason: "test corrupt".to_string(),
+            });
+        }
+        Ok(Some(DecodedFrame::new_cpu(
+            vec![0u8; 4],
+            1,
+            1,
+            4,
+            PixelFormat::Bgra8,
+            0,
+        )))
+    }
+
+    fn flush(&mut self) -> Result<Vec<DecodedFrame>, VideoError> {
+        Ok(vec![])
+    }
+
+    fn codec(&self) -> Codec {
+        Codec::Hevc
+    }
+}
+
+// ── Stub coverage ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_null_decoder_flush_and_codec() {
+    let mut d = NullDecoder {
+        emit: false,
+        fail: false,
+    };
+    assert!(d.flush().unwrap().is_empty());
+    assert_eq!(d.codec(), Codec::Hevc);
+}
+
+#[test]
+fn test_skip_bad_decoder_flush_and_codec() {
+    let mut d = SkipBadDecoder;
+    assert!(d.flush().unwrap().is_empty());
+    assert_eq!(d.codec(), Codec::Hevc);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Binds a loopback QUIC listener and returns it together with the server

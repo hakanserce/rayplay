@@ -84,7 +84,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_connect_with_handler_shutdown_before_connect() {
         let (listener, cert_bytes, addr) = loopback_listener();
-        let _guard = tokio::spawn(async move { listener.accept().await });
+        let _server = tokio::spawn(async move { listener.accept().await });
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         tx.send(()).unwrap();
         assert!(
@@ -173,7 +173,7 @@ mod tests {
     async fn test_connect_handler_runs_until_shutdown() {
         use super::super::config::ClientConfig;
         let (listener, cert, addr) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
+        let server_task = tokio::spawn(async move { listener.accept().await });
         let dir = tempfile::tempdir().unwrap();
         let cert_path = dir.path().join("server.der");
         std::fs::write(&cert_path, &cert).unwrap();
@@ -185,11 +185,11 @@ mod tests {
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        // Spawn connect() without pre-sending shutdown so the handler closure
-        // (VtDecoder creation + receive loop) is actually entered.
         let task = tokio::spawn(connect(config, frame_tx, shutdown_rx));
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Wait until the QUIC connection is accepted — at that point the handler
+        // closure (VtDecoder creation + receive loop) has been entered.
+        let _server = server_task.await.unwrap();
         shutdown_tx.send(()).unwrap();
         assert!(task.await.unwrap().is_ok());
     }

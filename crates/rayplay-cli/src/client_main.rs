@@ -2,17 +2,10 @@
 
 mod client;
 
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
 use clap::Parser;
 use client::{ClientArgs, ClientConfig};
 use rayplay_video::{DecodedFrame, RenderWindow};
-
-/// Bounded capacity of the decoded-frame channel between the network thread
-/// and the `winit` render loop.  Keeping this small (2) ensures the renderer
-/// always works on the most recent frame rather than draining a backlog.
-const DEFAULT_FRAME_CHANNEL_CAPACITY: usize = 2;
 
 // llvm-cov:excl-start
 
@@ -24,6 +17,13 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
+    use std::sync::{Arc, Mutex};
+
+    /// Bounded capacity of the decoded-frame channel between the network thread
+    /// and the `winit` render loop.  Keeping this small (2) ensures the renderer
+    /// always works on the most recent frame rather than draining a backlog.
+    const DEFAULT_FRAME_CHANNEL_CAPACITY: usize = 2;
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -52,8 +52,7 @@ pub struct ClientConfig {
 /// Returns the default certificate path: `$HOME/.config/rayview/server.der`.
 fn default_cert_path() -> PathBuf {
     std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
         .join(".config/rayview/server.der")
 }
 
