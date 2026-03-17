@@ -5,12 +5,14 @@ use std::{future::Future, net::SocketAddr};
 use anyhow::Result;
 use clap::Parser;
 use rayplay_network::{QuicListener, QuicVideoTransport};
+#[cfg(target_os = "windows")]
+use rayplay_video::encoder::GpuTextureHandle;
 use rayplay_video::encoder::{Bitrate, EncoderConfig};
 #[cfg(any(target_os = "windows", test))]
 use rayplay_video::{
     EncodedPacket,
     capture::{CaptureError, ScreenCapturer},
-    encoder::VideoEncoder,
+    encoder::{EncoderInput, VideoEncoder},
     frame::RawFrame,
 };
 use tokio_util::sync::CancellationToken;
@@ -173,7 +175,7 @@ pub(crate) fn drive_encode_loop(
         tracing::debug!(timestamp_us = ts, "frame_captured");
         let raw = RawFrame::new(frame.data, frame.width, frame.height, frame.stride, ts);
 
-        match encoder.encode(&raw) {
+        match encoder.encode(EncoderInput::Cpu(&raw)) {
             Ok(Some(pkt)) => {
                 tracing::debug!(timestamp_us = ts, size = pkt.data.len(), "frame_encoded");
                 if packet_tx.blocking_send(Ok(pkt)).is_err() {
@@ -267,28 +269,130 @@ pub(crate) async fn stream_with_pipeline(
     result
 }
 
+/// Runs the zero-copy capture-and-encode loop on a dedicated blocking thread.
+///
+/// Acquires GPU textures from `capturer`, passes them directly to the encoder
+/// as [`EncoderInput::GpuTexture`], and sends resulting packets over `packet_tx`.
+/// The DXGI frame is released after encoding completes.
+#[cfg(target_os = "windows")]
+pub(crate) fn drive_zero_copy_encode_loop(
+    capturer: impl rayplay_video::capture::ZeroCopyCapturer,
+    mut encoder: impl rayplay_video::encoder::VideoEncoder,
+    packet_tx: tokio::sync::mpsc::Sender<anyhow::Result<EncodedPacket>>,
+    session_start: std::time::Instant,
+) {
+    use rayplay_video::capture::CaptureError;
+
+    loop {
+        let texture = match capturer.acquire_texture() {
+            Ok(t) => t,
+            Err(CaptureError::Timeout(_)) => {
+                if packet_tx.is_closed() {
+                    return;
+                }
+                continue;
+            }
+            Err(e) => {
+                let _ = packet_tx.blocking_send(Err(anyhow::Error::from(e)));
+                return;
+            }
+        };
+
+        let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+        tracing::debug!(timestamp_us = ts, "zero_copy_frame_captured");
+
+        // RAII guard ensures `release_frame` is called even if `encode` panics.
+        struct FrameGuard<'c, C: rayplay_video::capture::ZeroCopyCapturer>(&'c C);
+        impl<C: rayplay_video::capture::ZeroCopyCapturer> Drop for FrameGuard<'_, C> {
+            fn drop(&mut self) {
+                self.0.release_frame();
+            }
+        }
+        let _guard = FrameGuard(&capturer);
+
+        let input = EncoderInput::GpuTexture {
+            handle: GpuTextureHandle(texture.texture_ptr),
+            width: texture.width,
+            height: texture.height,
+            timestamp_us: ts,
+        };
+
+        let result = encoder.encode(input);
+
+        match result {
+            Ok(Some(pkt)) => {
+                tracing::debug!(timestamp_us = ts, size = pkt.data.len(), "frame_encoded");
+                if packet_tx.blocking_send(Ok(pkt)).is_err() {
+                    tracing::debug!("encode channel closed, stream is shutting down");
+                    return;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = packet_tx.blocking_send(Err(anyhow::Error::from(e)));
+                return;
+            }
+        }
+    }
+}
+
+/// Drives the zero-copy encode-then-send loop with pre-built pipeline components.
+///
+/// Similar to [`stream_with_pipeline`] but uses [`drive_zero_copy_encode_loop`]
+/// for the GPU-to-GPU path.
+#[cfg(target_os = "windows")]
+pub(crate) async fn stream_with_zero_copy_pipeline(
+    transport: QuicVideoTransport,
+    capturer: impl rayplay_video::capture::ZeroCopyCapturer + 'static,
+    encoder: impl rayplay_video::encoder::VideoEncoder + 'static,
+    token: CancellationToken,
+) -> Result<()> {
+    const ENCODE_CHANNEL_CAPACITY: usize = 4;
+
+    let (packet_tx, packet_rx) =
+        tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(ENCODE_CHANNEL_CAPACITY);
+    let session_start = std::time::Instant::now();
+
+    let encode_handle = tokio::task::spawn_blocking(move || {
+        drive_zero_copy_encode_loop(capturer, encoder, packet_tx, session_start);
+    });
+
+    let result = run_send_loop(transport, packet_rx, token).await;
+    encode_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("encode thread panicked: {e}"))?;
+    result
+}
+
 /// Resolves platform-specific capture and encoder then calls
-/// [`stream_with_pipeline`].
+/// [`stream_with_zero_copy_pipeline`] for the zero-copy GPU path.
 #[cfg(target_os = "windows")]
 async fn stream(
     transport: QuicVideoTransport,
     config: HostConfig,
     token: CancellationToken,
 ) -> Result<()> {
-    use rayplay_video::{CaptureConfig, create_capturer, create_encoder};
+    use std::sync::Arc;
+
+    use rayplay_video::{
+        CaptureConfig, SharedD3D11Device, capture::ZeroCopyCapturer, dxgi_capture::DxgiCapture,
+        nvenc::NvencEncoder,
+    };
+
+    let device = Arc::new(SharedD3D11Device::new().map_err(anyhow::Error::from)?);
 
     let cap_config = CaptureConfig {
         target_fps: config.encoder_config.fps,
         acquire_timeout_ms: 100,
     };
+    let capturer = DxgiCapture::new(cap_config, device.clone()).map_err(anyhow::Error::from)?;
+    let (cap_width, cap_height) = <DxgiCapture as ZeroCopyCapturer>::resolution(&capturer);
 
-    let capturer = create_capturer(cap_config).map_err(anyhow::Error::from)?;
-    let (cap_width, cap_height) = capturer.resolution();
     let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
         .with_bitrate(config.encoder_config.bitrate);
-    let encoder = create_encoder(enc_config).map_err(anyhow::Error::from)?;
+    let encoder = NvencEncoder::new(enc_config).map_err(anyhow::Error::from)?;
 
-    stream_with_pipeline(transport, capturer, encoder, token).await
+    stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
 }
 
 // The Windows version is `async`; keep the same signature here.
@@ -317,7 +421,7 @@ mod tests {
     use rayplay_network::QuicVideoTransport;
     use rayplay_video::{
         capture::{CaptureError, CapturedFrame, ScreenCapturer},
-        encoder::{EncoderConfig, VideoEncoder, VideoError},
+        encoder::{EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         frame::RawFrame,
         packet::EncodedPacket,
     };
@@ -408,12 +512,16 @@ mod tests {
     }
 
     impl VideoEncoder for StubEncoder {
-        fn encode(&mut self, frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+        fn encode(&mut self, input: EncoderInput<'_>) -> Result<Option<EncodedPacket>, VideoError> {
+            let timestamp_us = match &input {
+                EncoderInput::Cpu(f) => f.timestamp_us,
+                EncoderInput::GpuTexture { timestamp_us, .. } => *timestamp_us,
+            };
             self.frame_count += 1;
             Ok(Some(EncodedPacket::new(
                 vec![u8::try_from(self.frame_count).expect("frame count fits in u8")],
                 self.frame_count == 1,
-                frame.timestamp_us,
+                timestamp_us,
                 16_667,
             )))
         }
@@ -446,7 +554,10 @@ mod tests {
     }
 
     impl VideoEncoder for FailingEncoder {
-        fn encode(&mut self, _frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+        fn encode(
+            &mut self,
+            _input: EncoderInput<'_>,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
             Err(VideoError::EncodingFailed {
                 reason: "stub failure".to_owned(),
             })
@@ -497,7 +608,10 @@ mod tests {
     }
 
     impl VideoEncoder for BufferingEncoder {
-        fn encode(&mut self, _frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+        fn encode(
+            &mut self,
+            _input: EncoderInput<'_>,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
             Ok(None)
         }
 
@@ -561,7 +675,7 @@ mod tests {
             config: EncoderConfig::new(2, 2, 60),
         };
         let raw = RawFrame::new(vec![0u8; 16], 2, 2, 8, 0);
-        assert!(e.encode(&raw).unwrap().is_none());
+        assert!(e.encode(EncoderInput::Cpu(&raw)).unwrap().is_none());
     }
 
     #[test]
@@ -588,7 +702,10 @@ mod tests {
     }
 
     impl VideoEncoder for PanickingEncoder {
-        fn encode(&mut self, _frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+        fn encode(
+            &mut self,
+            _input: EncoderInput<'_>,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
             panic!("deliberate encode-thread panic for testing");
         }
 

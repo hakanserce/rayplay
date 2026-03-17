@@ -49,6 +49,50 @@ impl CapturedFrame {
     }
 }
 
+/// GPU-resident captured frame for the zero-copy encode path (Windows only).
+///
+/// Holds a raw pointer to an `ID3D11Texture2D` acquired from Desktop
+/// Duplication.  The caller **must** call
+/// [`ZeroCopyCapturer::release_frame`] after the encoder has consumed
+/// the texture.
+///
+/// Timestamp is not a property of the captured texture itself — the caller
+/// assigns a session-relative timestamp when constructing [`EncoderInput`].
+#[cfg(target_os = "windows")]
+pub struct CapturedTexture {
+    /// Opaque pointer to `ID3D11Texture2D`.
+    pub texture_ptr: *mut std::ffi::c_void,
+    pub width: u32,
+    pub height: u32,
+}
+
+// SAFETY: same single-thread model as DxgiCapture — the pointer is only
+// dereferenced on the dedicated capture/encode thread.
+#[cfg(target_os = "windows")]
+unsafe impl Send for CapturedTexture {}
+
+/// Zero-copy screen capturer that returns GPU-resident textures (Windows only).
+///
+/// Unlike [`ScreenCapturer`], the ownership contract requires the caller to
+/// call [`release_frame`](ZeroCopyCapturer::release_frame) after encoding
+/// completes.  This keeps the DXGI duplication frame locked only while the
+/// encoder is reading it.
+#[cfg(target_os = "windows")]
+pub trait ZeroCopyCapturer: Send {
+    /// Acquires the next desktop frame as a GPU texture.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureError::AcquireFailed`] or [`CaptureError::Timeout`].
+    fn acquire_texture(&self) -> Result<CapturedTexture, CaptureError>;
+
+    /// Releases the most recently acquired frame back to the duplication API.
+    fn release_frame(&self);
+
+    /// Returns the capture resolution `(width, height)`.
+    fn resolution(&self) -> (u32, u32);
+}
+
 pub trait ScreenCapturer: Send {
     /// Captures a single frame from the display.
     ///
@@ -74,8 +118,13 @@ pub trait ScreenCapturer: Send {
 pub fn create_capturer(config: CaptureConfig) -> Result<Box<dyn ScreenCapturer>, CaptureError> {
     #[cfg(target_os = "windows")]
     {
+        use std::sync::Arc;
+
+        use crate::d3d11_device::SharedD3D11Device;
         use crate::dxgi_capture::DxgiCapture;
-        DxgiCapture::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
+
+        let device = Arc::new(SharedD3D11Device::new()?);
+        DxgiCapture::new(config, device).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
     }
     #[cfg(not(target_os = "windows"))]
     {

@@ -1,6 +1,63 @@
+use std::fmt;
+
 use thiserror::Error;
 
 use crate::{frame::RawFrame, packet::EncodedPacket};
+
+/// Opaque handle to a GPU-resident texture for zero-copy encoding.
+///
+/// On Windows, wraps a `*mut ID3D11Texture2D` COM pointer transferred from
+/// [`ZeroCopyCapturer::acquire_texture`].  The resource must remain valid
+/// (i.e. the DXGI frame must not be released) until the encoder has consumed
+/// it and [`ZeroCopyCapturer::release_frame`] has been called.
+#[repr(transparent)]
+pub struct GpuTextureHandle(pub *mut std::ffi::c_void);
+
+// SAFETY: only accessed on the single encoding thread that owns the D3D11 context.
+unsafe impl Send for GpuTextureHandle {}
+
+impl fmt::Debug for GpuTextureHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GpuTextureHandle({:p})", self.0)
+    }
+}
+
+/// Input for a video encoder — CPU pixels or GPU-resident texture.
+pub enum EncoderInput<'a> {
+    /// CPU-accessible raw pixel data (ADR-001 Option A fallback).
+    Cpu(&'a RawFrame),
+    /// Opaque GPU texture handle (zero-copy ADR-001 Option B).
+    GpuTexture {
+        handle: GpuTextureHandle,
+        width: u32,
+        height: u32,
+        timestamp_us: u64,
+    },
+}
+
+// SAFETY: `GpuTexture::handle` is only dereferenced on the encoding thread that
+// owns the D3D11 device context — the same single-thread model as `DxgiCapture`.
+unsafe impl Send for EncoderInput<'_> {}
+
+impl fmt::Debug for EncoderInput<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cpu(frame) => f.debug_tuple("Cpu").field(frame).finish(),
+            Self::GpuTexture {
+                handle,
+                width,
+                height,
+                timestamp_us,
+            } => f
+                .debug_struct("GpuTexture")
+                .field("handle", handle)
+                .field("width", width)
+                .field("height", height)
+                .field("timestamp_us", timestamp_us)
+                .finish(),
+        }
+    }
+}
 
 /// Supported video codecs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,7 +209,7 @@ pub trait VideoEncoder: Send {
     /// Returns `VideoError::InvalidDimensions` if the frame size does not
     /// match the encoder configuration, or `VideoError::EncodingFailed` on
     /// an internal encoder error.
-    fn encode(&mut self, frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError>;
+    fn encode(&mut self, input: EncoderInput<'_>) -> Result<Option<EncodedPacket>, VideoError>;
 
     /// Flushes any buffered frames and returns all remaining encoded packets.
     ///
@@ -314,6 +371,104 @@ mod tests {
         assert!(bps_60 > bps_30, "60fps bitrate should exceed 30fps");
     }
 
+    // ── EncoderInput ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_encoder_input_cpu_construction_and_access() {
+        let frame = RawFrame::new(vec![0u8; 16], 2, 2, 8, 42);
+        let input = EncoderInput::Cpu(&frame);
+        match input {
+            EncoderInput::Cpu(f) => {
+                assert_eq!(f.width, 2);
+                assert_eq!(f.timestamp_us, 42);
+            }
+            EncoderInput::GpuTexture { .. } => panic!("expected Cpu variant"),
+        }
+    }
+
+    #[test]
+    fn test_encoder_input_gpu_texture_construction_with_null_pointer() {
+        let input = EncoderInput::GpuTexture {
+            handle: GpuTextureHandle(std::ptr::null_mut()),
+            width: 1920,
+            height: 1080,
+            timestamp_us: 100,
+        };
+        match input {
+            EncoderInput::GpuTexture {
+                handle,
+                width,
+                height,
+                timestamp_us,
+            } => {
+                assert!(handle.0.is_null());
+                assert_eq!(width, 1920);
+                assert_eq!(height, 1080);
+                assert_eq!(timestamp_us, 100);
+            }
+            EncoderInput::Cpu(_) => panic!("expected GpuTexture variant"),
+        }
+    }
+
+    #[test]
+    fn test_encoder_input_debug_cpu_variant() {
+        let frame = RawFrame::new(vec![0u8; 4], 1, 1, 4, 0);
+        let input = EncoderInput::Cpu(&frame);
+        let dbg = format!("{input:?}");
+        assert!(dbg.contains("Cpu"));
+    }
+
+    #[test]
+    fn test_encoder_input_debug_gpu_texture_variant() {
+        let input = EncoderInput::GpuTexture {
+            handle: GpuTextureHandle(std::ptr::null_mut()),
+            width: 3840,
+            height: 2160,
+            timestamp_us: 999,
+        };
+        let dbg = format!("{input:?}");
+        assert!(dbg.contains("GpuTexture"));
+        assert!(dbg.contains("3840"));
+        assert!(dbg.contains("2160"));
+        assert!(dbg.contains("999"));
+    }
+
+    #[test]
+    fn test_encoder_input_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<EncoderInput<'_>>();
+    }
+
+    #[test]
+    fn test_gpu_texture_handle_debug_shows_pointer() {
+        let h = GpuTextureHandle(std::ptr::null_mut());
+        let dbg = format!("{h:?}");
+        assert!(dbg.contains("GpuTextureHandle"));
+    }
+
+    #[test]
+    fn test_gpu_texture_handle_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<GpuTextureHandle>();
+    }
+
+    #[test]
+    fn test_null_encoder_rejects_gpu_texture_input() {
+        let config = EncoderConfig::new(1920, 1080, 60);
+        let mut enc = NullEncoder {
+            config,
+            return_packet: true,
+        };
+        let input = EncoderInput::GpuTexture {
+            handle: GpuTextureHandle(std::ptr::null_mut()),
+            width: 1920,
+            height: 1080,
+            timestamp_us: 0,
+        };
+        let err = enc.encode(input).unwrap_err();
+        assert!(matches!(err, VideoError::EncodingFailed { .. }));
+    }
+
     // ── NullEncoder (test double) ──────────────────────────────────────────────
 
     struct NullEncoder {
@@ -322,7 +477,15 @@ mod tests {
     }
 
     impl VideoEncoder for NullEncoder {
-        fn encode(&mut self, frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
+        fn encode(&mut self, input: EncoderInput<'_>) -> Result<Option<EncodedPacket>, VideoError> {
+            let frame = match input {
+                EncoderInput::Cpu(f) => f,
+                EncoderInput::GpuTexture { .. } => {
+                    return Err(VideoError::EncodingFailed {
+                        reason: "NullEncoder does not support GPU textures".to_string(),
+                    });
+                }
+            };
             if frame.width != self.config.width || frame.height != self.config.height {
                 return Err(VideoError::InvalidDimensions {
                     width: frame.width,
@@ -358,7 +521,7 @@ mod tests {
             return_packet: true,
         };
         let frame = RawFrame::new(vec![0u8; 1920 * 1080 * 4], 1920, 1080, 1920 * 4, 0);
-        let result = enc.encode(&frame).unwrap();
+        let result = enc.encode(EncoderInput::Cpu(&frame)).unwrap();
         assert!(result.is_some());
     }
 
@@ -370,7 +533,7 @@ mod tests {
             return_packet: false,
         };
         let frame = RawFrame::new(vec![0u8; 1920 * 1080 * 4], 1920, 1080, 1920 * 4, 0);
-        let result = enc.encode(&frame).unwrap();
+        let result = enc.encode(EncoderInput::Cpu(&frame)).unwrap();
         assert!(result.is_none());
     }
 
@@ -382,7 +545,7 @@ mod tests {
             return_packet: false,
         };
         let wrong_frame = RawFrame::new(vec![0u8; 4], 2, 2, 8, 0);
-        let err = enc.encode(&wrong_frame).unwrap_err();
+        let err = enc.encode(EncoderInput::Cpu(&wrong_frame)).unwrap_err();
         assert!(matches!(err, VideoError::InvalidDimensions { .. }));
     }
 
