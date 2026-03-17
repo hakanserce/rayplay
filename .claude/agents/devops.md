@@ -1,4 +1,5 @@
 ---
+name: devops
 description: "DevOps engineer who manages CI/CD pipelines, build tasks, deployment configuration, and infrastructure for the RayPlay project"
 model: claude-sonnet-4-20250514
 tools:

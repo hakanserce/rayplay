@@ -1,4 +1,5 @@
 ---
+name: project-manager
 description: "Project manager who tracks deliverables, timelines, velocity, blockers, and development costs for the RayPlay project"
 model: claude-sonnet-4-20250514
 tools:

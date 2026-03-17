@@ -1,4 +1,5 @@
 ---
+name: developer
 description: "Rust developer who implements Use Cases, writes tests, and ensures compliance with non-functional requirements for the RayPlay project"
 model: claude-sonnet-4-20250514
 tools:

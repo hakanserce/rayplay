@@ -1,4 +1,5 @@
 ---
+name: senior-developer
 description: "Senior Rust developer who reviews code for quality, architecture, and compliance with non-functional requirements. Creates refactoring tasks. Makes architecture decisions."
 model: claude-opus-4-20250514
 tools:

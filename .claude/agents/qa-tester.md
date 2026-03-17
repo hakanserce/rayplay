@@ -1,4 +1,5 @@
 ---
+name: qa-tester
 description: "QA engineer who validates acceptance criteria, runs integration tests, verifies test coverage, and ensures quality gates pass for the RayPlay project"
 model: claude-sonnet-4-20250514
 tools:

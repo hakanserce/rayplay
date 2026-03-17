@@ -1,4 +1,5 @@
 ---
+name: product-manager
 description: "Product manager who defines requirements, writes Use Case documents, manages acceptance criteria, and reviews UCs for the RayPlay project"
 model: claude-sonnet-4-20250514
 tools:
