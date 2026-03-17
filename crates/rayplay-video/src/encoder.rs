@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn test_encoder_config_chained_methods() {
-        let cfg = EncoderConfig::with_codec(1280, 720, 30, Codec::H264)
-            .with_bitrate(Bitrate::Mbps(5));
+        let cfg =
+            EncoderConfig::with_codec(1280, 720, 30, Codec::H264).with_bitrate(Bitrate::Mbps(5));
         assert_eq!(cfg.codec, Codec::H264);
         assert_eq!(cfg.bitrate, Bitrate::Mbps(5));
         assert_eq!(cfg.width, 1280);

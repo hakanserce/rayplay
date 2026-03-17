@@ -7,7 +7,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rayplay_video::{
-    Bitrate, DEFAULT_CHUNK_SIZE, EncodedPacket, EncoderConfig, FrameChunker, RawFrame,
+    Bitrate, Codec, DEFAULT_CHUNK_SIZE, EncodedPacket, EncoderConfig, FrameChunker, RawFrame,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ fn bench_raw_frame_alloc(c: &mut Criterion) {
 
 fn bench_bitrate_resolve(c: &mut Criterion) {
     c.bench_function("bitrate_auto_resolve_1080p60", |b| {
-        b.iter(|| black_box(Bitrate::Auto.resolve(1920, 1080, 60)))
+        b.iter(|| black_box(Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60)))
     });
 }
 
