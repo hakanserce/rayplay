@@ -18,6 +18,9 @@ use crate::{
     renderer::{RenderError, Renderer},
 };
 
+#[cfg(target_os = "macos")]
+use crate::decoded_frame::IoSurfaceHandle;
+
 // ── WGSL shaders ──────────────────────────────────────────────────────────────
 
 /// Full-screen triangle shader for BGRA8 frames.
@@ -101,15 +104,6 @@ pub(crate) enum RendererOutput {
     },
 }
 
-impl RendererOutput {
-    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
-        match self {
-            Self::Surface { config, .. } => config.format,
-            Self::Offscreen { texture, .. } => texture.format(),
-        }
-    }
-}
-
 // ── Texture cache ──────────────────────────────────────────────────────────────
 
 /// Per-format GPU texture cache.
@@ -139,9 +133,9 @@ enum TextureCache {
 /// Created by [`RenderWindow::run`] after the `winit` window is available.
 /// Implements [`Renderer`] so it can be swapped for a stub in tests.
 pub struct WgpuRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    output: RendererOutput,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) output: RendererOutput,
     bgra_pipeline: wgpu::RenderPipeline,
     nv12_pipeline: wgpu::RenderPipeline,
     bgra_bgl: wgpu::BindGroupLayout,
@@ -178,16 +172,19 @@ impl WgpuRenderer {
             view_formats: &[],
         });
         let output = RendererOutput::Offscreen { texture };
-        Self::from_parts(device, queue, output)
+        Self::from_parts(device, queue, output, wgpu::TextureFormat::Rgba8Unorm)
     }
 
     /// Shared initialisation path for both surface and offscreen renderers.
+    ///
+    /// `surface_format` must be passed explicitly — for offscreen use
+    /// [`wgpu::TextureFormat::Rgba8Unorm`]; for surface use `config.format`.
     pub(crate) fn from_parts(
         device: wgpu::Device,
         queue: wgpu::Queue,
         output: RendererOutput,
+        surface_format: wgpu::TextureFormat,
     ) -> Self {
-        let surface_format = output.surface_format();
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("frame_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -216,12 +213,11 @@ impl WgpuRenderer {
     /// Call this when [`RenderError::SurfaceLost`] is returned from
     /// [`present_frame`](Self::present_frame), or whenever the window emits a
     /// `Resized` event.  No-op when using the offscreen output target.
+    ///
+    /// Surface-specific implementation lives in `wgpu_surface.rs` (excluded from
+    /// the unit-test coverage gate, as it requires a live swap chain).
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if let RendererOutput::Surface { surface, config } = &mut self.output {
-            config.width = new_size.width.max(1);
-            config.height = new_size.height.max(1);
-            surface.configure(&self.device, config);
-        }
+        self.apply_resize(new_size);
     }
 
     // ── Internal helpers ───────────────────────────────────────────────────────
@@ -405,10 +401,176 @@ impl WgpuRenderer {
         }
     }
 
+    /// Imports an `IOSurface` as NV12 Metal textures and creates a bind group.
+    ///
+    /// Returns `None` if any step fails (logged as a warning).  The caller
+    /// should fall back to a clear-only render pass.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_lines, unexpected_cfgs)]
+    fn import_iosurface_textures(
+        &self,
+        handle: &IoSurfaceHandle,
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::BindGroup> {
+        use metal::foreign_types::ForeignType;
+        use objc::msg_send;
+        use objc::sel;
+        use objc::sel_impl;
+
+        let iosurface_ptr = handle.as_ptr();
+
+        // SAFETY: wgpu is running on the Metal backend on macOS.
+        unsafe {
+            self.device
+                .as_hal::<wgpu::hal::metal::Api, _, Option<wgpu::BindGroup>>(|hal_device| {
+                    let hal_device = hal_device?;
+                    let raw_device = hal_device.raw_device().lock();
+
+                    // ── Y plane (plane 0): R8Unorm ──────────────────────
+                    let y_desc = metal::TextureDescriptor::new();
+                    y_desc.set_texture_type(metal::MTLTextureType::D2);
+                    y_desc.set_pixel_format(metal::MTLPixelFormat::R8Unorm);
+                    y_desc.set_width(u64::from(width));
+                    y_desc.set_height(u64::from(height));
+                    y_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+                    y_desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+                    let y_raw: *mut metal::MTLTexture = msg_send![
+                        raw_device.as_ref(),
+                        newTextureWithDescriptor:y_desc.as_ref()
+                        iosurface:iosurface_ptr
+                        plane:0usize
+                    ];
+                    if y_raw.is_null() {
+                        tracing::warn!("Metal newTextureWithDescriptor failed for Y plane");
+                        return None;
+                    }
+                    let y_metal = metal::Texture::from_ptr(y_raw.cast());
+
+                    // ── UV plane (plane 1): Rg8Unorm ────────────────────
+                    let uv_desc = metal::TextureDescriptor::new();
+                    uv_desc.set_texture_type(metal::MTLTextureType::D2);
+                    uv_desc.set_pixel_format(metal::MTLPixelFormat::RG8Unorm);
+                    uv_desc.set_width(u64::from(width / 2));
+                    uv_desc.set_height(u64::from(height / 2));
+                    uv_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+                    uv_desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+                    let uv_raw: *mut metal::MTLTexture = msg_send![
+                        raw_device.as_ref(),
+                        newTextureWithDescriptor:uv_desc.as_ref()
+                        iosurface:iosurface_ptr
+                        plane:1usize
+                    ];
+                    if uv_raw.is_null() {
+                        tracing::warn!("Metal newTextureWithDescriptor failed for UV plane");
+                        return None;
+                    }
+                    let uv_metal = metal::Texture::from_ptr(uv_raw.cast());
+
+                    // ── Import Y texture into wgpu ──────────────────────
+                    let y_hal = wgpu::hal::metal::Device::texture_from_raw(
+                        y_metal,
+                        wgpu::TextureFormat::R8Unorm,
+                        metal::MTLTextureType::D2,
+                        1,
+                        1,
+                        wgpu::hal::CopyExtent {
+                            width,
+                            height,
+                            depth: 1,
+                        },
+                    );
+                    let y_wgpu = self
+                        .device
+                        .create_texture_from_hal::<wgpu::hal::metal::Api>(
+                            y_hal,
+                            &wgpu::TextureDescriptor {
+                                label: Some("iosurface_y"),
+                                size: wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::R8Unorm,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                                view_formats: &[],
+                            },
+                        );
+
+                    // ── Import UV texture into wgpu ─────────────────────
+                    let uv_hal = wgpu::hal::metal::Device::texture_from_raw(
+                        uv_metal,
+                        wgpu::TextureFormat::Rg8Unorm,
+                        metal::MTLTextureType::D2,
+                        1,
+                        1,
+                        wgpu::hal::CopyExtent {
+                            width: width / 2,
+                            height: height / 2,
+                            depth: 1,
+                        },
+                    );
+                    let uv_wgpu = self
+                        .device
+                        .create_texture_from_hal::<wgpu::hal::metal::Api>(
+                            uv_hal,
+                            &wgpu::TextureDescriptor {
+                                label: Some("iosurface_uv"),
+                                size: wgpu::Extent3d {
+                                    width: width / 2,
+                                    height: height / 2,
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rg8Unorm,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                                view_formats: &[],
+                            },
+                        );
+
+                    // ── Build bind group ─────────────────────────────────
+                    let y_view = y_wgpu.create_view(&wgpu::TextureViewDescriptor::default());
+                    let uv_view = uv_wgpu.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("iosurface_nv12_bind_group"),
+                        layout: &self.nv12_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&y_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&uv_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            },
+                        ],
+                    }))
+                })
+                .flatten()
+        }
+    }
+
     /// Encodes a full-screen render pass into a command buffer.
     ///
-    /// Shared by both the surface and offscreen presentation paths.
-    fn encode_frame(&self, output_view: &wgpu::TextureView) -> wgpu::CommandBuffer {
+    /// When `override_nv12_bind_group` is `Some`, it is used in place of the
+    /// cached NV12 bind group (`IOSurface` zero-copy path).
+    pub(crate) fn encode_frame(
+        &self,
+        output_view: &wgpu::TextureView,
+        override_nv12_bind_group: Option<&wgpu::BindGroup>,
+    ) -> wgpu::CommandBuffer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -429,18 +591,28 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            match self.texture_cache.as_ref() {
-                Some(TextureCache::Bgra { bind_group, .. }) => {
-                    rp.set_pipeline(&self.bgra_pipeline);
-                    rp.set_bind_group(0, bind_group, &[]);
+            let has_pipeline = if let Some(bg) = override_nv12_bind_group {
+                rp.set_pipeline(&self.nv12_pipeline);
+                rp.set_bind_group(0, bg, &[]);
+                true
+            } else {
+                match self.texture_cache.as_ref() {
+                    Some(TextureCache::Bgra { bind_group, .. }) => {
+                        rp.set_pipeline(&self.bgra_pipeline);
+                        rp.set_bind_group(0, bind_group, &[]);
+                        true
+                    }
+                    Some(TextureCache::Nv12 { bind_group, .. }) => {
+                        rp.set_pipeline(&self.nv12_pipeline);
+                        rp.set_bind_group(0, bind_group, &[]);
+                        true
+                    }
+                    None => false,
                 }
-                Some(TextureCache::Nv12 { bind_group, .. }) => {
-                    rp.set_pipeline(&self.nv12_pipeline);
-                    rp.set_bind_group(0, bind_group, &[]);
-                }
-                None => {}
+            };
+            if has_pipeline {
+                rp.draw(0..3, 0..1);
             }
-            rp.draw(0..3, 0..1);
         }
         encoder.finish()
     }
@@ -448,33 +620,51 @@ impl WgpuRenderer {
 
 impl Renderer for WgpuRenderer {
     fn present_frame(&mut self, frame: &DecodedFrame) -> Result<(), RenderError> {
-        if !self.texture_matches(frame) {
-            self.texture_cache = Some(match frame.format {
-                PixelFormat::Bgra8 => self.create_bgra_cache(frame.width, frame.height),
-                PixelFormat::Nv12 => self.create_nv12_cache(frame.width, frame.height),
-            });
-        }
-        self.upload_frame(frame);
+        // ── IOSurface zero-copy path (macOS hardware frames) ────────────
+        #[cfg(target_os = "macos")]
+        let hw_bind_group = if frame.is_hardware_frame {
+            if let Some(ref handle) = frame.iosurface {
+                let bg = self.import_iosurface_textures(handle, frame.width, frame.height);
+                if bg.is_none() {
+                    tracing::warn!("IOSurface import failed; falling back to clear-only render");
+                }
+                bg
+            } else {
+                tracing::warn!(
+                    "hardware frame missing IOSurface handle; falling back to clear-only render"
+                );
+                None
+            }
+        } else {
+            None
+        };
 
-        match &self.output {
-            RendererOutput::Offscreen { texture, .. } => {
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let cmd = self.encode_frame(&view);
-                self.queue.submit(std::iter::once(cmd));
+        #[cfg(not(target_os = "macos"))]
+        let hw_bind_group: Option<wgpu::BindGroup> = None;
+
+        // ── CPU upload path (software frames) ───────────────────────────
+        if hw_bind_group.is_none() && !frame.is_hardware_frame {
+            if !self.texture_matches(frame) {
+                self.texture_cache = Some(match frame.format {
+                    PixelFormat::Bgra8 => self.create_bgra_cache(frame.width, frame.height),
+                    PixelFormat::Nv12 => self.create_nv12_cache(frame.width, frame.height),
+                });
             }
-            RendererOutput::Surface { surface, .. } => {
-                let output = surface
-                    .get_current_texture()
-                    .map_err(|e| surface_error_to_render_error(&e))?;
-                let view = output
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                let cmd = self.encode_frame(&view);
-                self.queue.submit(std::iter::once(cmd));
-                output.present();
-            }
+            self.upload_frame(frame);
         }
-        Ok(())
+
+        // ── Render ──────────────────────────────────────────────────────
+        // Offscreen path: render to the internal texture (used in tests/benchmarks).
+        if let RendererOutput::Offscreen { texture, .. } = &self.output {
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let cmd = self.encode_frame(&view, hw_bind_group.as_ref());
+            self.queue.submit(std::iter::once(cmd));
+            return Ok(());
+        }
+        // Surface path: acquire swap-chain frame, render, present.
+        // Implementation lives in wgpu_surface.rs (excluded from the unit-test
+        // coverage gate, as it requires a live swap chain).
+        self.present_to_surface(hw_bind_group.as_ref())
     }
 }
 
@@ -843,7 +1033,11 @@ mod tests {
     fn test_offscreen_surface_format_is_rgba8() {
         let (device, queue) = create_headless_device();
         let r = WgpuRenderer::new_offscreen(device, queue, 64, 64);
-        assert_eq!(r.output.surface_format(), wgpu::TextureFormat::Rgba8Unorm);
+        // surface_format() on an Offscreen variant delegates to the texture format.
+        let RendererOutput::Offscreen { texture } = &r.output else {
+            panic!("expected offscreen output")
+        };
+        assert_eq!(texture.format(), wgpu::TextureFormat::Rgba8Unorm);
     }
 
     // ── new_offscreen construction ────────────────────────────────────────────
@@ -857,14 +1051,11 @@ mod tests {
     fn test_new_offscreen_zero_dimensions_clamped_to_one() {
         let (device, queue) = create_headless_device();
         let r = WgpuRenderer::new_offscreen(device, queue, 0, 0);
-        match &r.output {
-            RendererOutput::Offscreen { texture } => {
-                let size = texture.size();
-                assert_eq!(size.width, 1);
-                assert_eq!(size.height, 1);
-            }
-            _ => panic!("expected offscreen output"),
-        }
+        let RendererOutput::Offscreen { texture } = &r.output else {
+            unreachable!("new_offscreen always produces Offscreen output")
+        };
+        assert_eq!(texture.size().width, 1);
+        assert_eq!(texture.size().height, 1);
     }
 
     // ── texture_matches ───────────────────────────────────────────────────────
@@ -976,5 +1167,156 @@ mod tests {
         let (device, _queue) = create_headless_device();
         let (_nv12_bgl, _pipeline) =
             build_nv12_pipeline(&device, wgpu::TextureFormat::Rgba8Unorm, NV12_SHADER);
+    }
+
+    // ── upload_frame with no cache ────────────────────────────────────────────
+
+    #[test]
+    fn test_upload_frame_no_op_when_no_cache() {
+        // With texture_cache == None, upload_frame must hit the `_ => {}` arm without panicking.
+        let r = make_offscreen(64, 64);
+        let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 0);
+        r.upload_frame(&frame);
+    }
+
+    // ── present_frame: hardware frame fallback (no IOSurface) ───────────────
+
+    #[test]
+    fn test_present_hardware_frame_without_iosurface_succeeds() {
+        let mut r = make_offscreen(64, 64);
+        let frame = DecodedFrame::new_hardware_test_stub(64, 64, 64, PixelFormat::Nv12, 0);
+        // Should succeed with a clear-only render (no crash, no panic).
+        assert!(r.present_frame(&frame).is_ok());
+    }
+
+    // ── IOSurface import (macOS only) ─────────────────────────────────────────
+
+    /// Creates an NV12 `CVPixelBuffer` with forced `IOSurface` backing and
+    /// returns the retained `IOSurfaceRef`, or null on failure.
+    ///
+    /// `kCVPixelBufferIOSurfacePropertiesKey` in the attributes dict forces
+    /// the system to allocate an `IOSurface`-backed biplanar pixel buffer.
+    #[cfg(target_os = "macos")]
+    unsafe fn create_nv12_iosurface(width: u32, height: u32) -> *mut std::ffi::c_void {
+        use std::ffi::c_void;
+
+        #[link(name = "CoreVideo", kind = "framework")]
+        unsafe extern "C" {
+            static kCVPixelBufferIOSurfacePropertiesKey: *const c_void; // CFStringRef
+            fn CVPixelBufferCreate(
+                allocator: *const c_void,
+                width: usize,
+                height: usize,
+                pixel_format_type: u32,
+                pixel_buffer_attributes: *const c_void,
+                pixel_buffer_out: *mut *mut c_void,
+            ) -> i32;
+            fn CVPixelBufferGetIOSurface(pixel_buffer: *mut c_void) -> *mut c_void;
+        }
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFDictionaryCreate(
+                alloc: *const c_void,
+                keys: *const *const c_void,
+                values: *const *const c_void,
+                num_values: isize,
+                key_callbacks: *const c_void,
+                value_callbacks: *const c_void,
+            ) -> *mut c_void;
+            fn CFRetain(cf: *const c_void) -> *const c_void;
+            fn CFRelease(cf: *const c_void);
+            static kCFTypeDictionaryKeyCallBacks: c_void;
+            static kCFTypeDictionaryValueCallBacks: c_void;
+        }
+
+        // Empty dict → value for kCVPixelBufferIOSurfacePropertiesKey.
+        let iosurface_props = unsafe {
+            CFDictionaryCreate(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &raw const kCFTypeDictionaryKeyCallBacks as *const c_void,
+                &raw const kCFTypeDictionaryValueCallBacks as *const c_void,
+            )
+        };
+        // Attributes dict: { IOSurfaceProperties → {} }
+        let attr_key: *const c_void = unsafe { kCVPixelBufferIOSurfacePropertiesKey };
+        let attr_val: *const c_void = iosurface_props.cast_const();
+        let attrs = unsafe {
+            CFDictionaryCreate(
+                std::ptr::null(),
+                &raw const attr_key as *const *const c_void,
+                &raw const attr_val as *const *const c_void,
+                1,
+                &raw const kCFTypeDictionaryKeyCallBacks as *const c_void,
+                &raw const kCFTypeDictionaryValueCallBacks as *const c_void,
+            )
+        };
+        // kCVPixelFormatType_420YpCbCr8BiPlanarFullRange = 875704438
+        let pixel_format: u32 = 875_704_438;
+        let mut pixel_buffer: *mut c_void = std::ptr::null_mut();
+        let status = unsafe {
+            CVPixelBufferCreate(
+                std::ptr::null(),
+                width as usize,
+                height as usize,
+                pixel_format,
+                attrs,
+                &raw mut pixel_buffer,
+            )
+        };
+        unsafe { CFRelease(attrs.cast_const()) };
+        unsafe { CFRelease(iosurface_props.cast_const()) };
+        if status != 0 || pixel_buffer.is_null() {
+            return std::ptr::null_mut();
+        }
+        let surface = unsafe { CVPixelBufferGetIOSurface(pixel_buffer) };
+        if !surface.is_null() {
+            unsafe { CFRetain(surface.cast_const()) };
+        }
+        unsafe { CFRelease(pixel_buffer.cast_const()) };
+        surface
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_create_nv12_iosurface_fails_on_zero_dimensions() {
+        // CVPixelBufferCreate rejects zero-dimension buffers; must return null.
+        let surface = unsafe { create_nv12_iosurface(0, 0) };
+        assert!(
+            surface.is_null(),
+            "expected null for zero-dimension IOSurface"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_import_iosurface_textures_with_real_surface() {
+        use crate::decoded_frame::IoSurfaceHandle;
+
+        let r = make_offscreen(64, 64);
+        let surface = unsafe { create_nv12_iosurface(64, 64) };
+        // IOSurface creation must succeed on Apple hardware.
+        assert!(!surface.is_null(), "create_nv12_iosurface should succeed");
+        // SAFETY: surface is a retained IOSurfaceRef.
+        let handle = unsafe { IoSurfaceHandle::from_retained(surface) };
+        // The import may succeed or return None; either path must not panic.
+        let _result = r.import_iosurface_textures(&handle, 64, 64);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_present_hardware_frame_with_real_iosurface() {
+        use crate::decoded_frame::IoSurfaceHandle;
+
+        let surface = unsafe { create_nv12_iosurface(64, 64) };
+        // IOSurface creation must succeed on Apple hardware.
+        assert!(!surface.is_null(), "create_nv12_iosurface should succeed");
+        // SAFETY: surface is a retained IOSurfaceRef.
+        let handle = unsafe { IoSurfaceHandle::from_retained(surface) };
+        let mut r = make_offscreen(64, 64);
+        let frame = DecodedFrame::new_hardware(64, 64, 64, PixelFormat::Nv12, 0, handle);
+        assert!(r.present_frame(&frame).is_ok());
     }
 }

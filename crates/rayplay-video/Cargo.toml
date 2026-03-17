@@ -22,6 +22,10 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { workspace = true }
+objc  = { workspace = true }
+
 [features]
 ## Enable hardware-accelerated codec tests (VtDecoder on Apple Silicon, NvencEncoder on Windows).
 ## Requires appropriate hardware. Only enabled on self-hosted CI runners.

@@ -1920,6 +1920,8 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "crossbeam-channel",
+ "metal",
+ "objc",
  "pollster",
  "serde",
  "serde_json",
