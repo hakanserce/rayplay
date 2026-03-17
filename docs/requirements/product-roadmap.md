@@ -32,6 +32,7 @@ screen rendered on the client at 60 fps. Video only, manual IP connection, CLI i
 | [UC-006](../uc/UC-006.md) | Host CLI (RayHost) | P0 | S |
 | [UC-007](../uc/UC-007.md) | Client CLI (RayView) | P0 | S |
 | [UC-008](../uc/UC-008.md) | End-to-End Video Streaming | P0 | M |
+| [UC-026](../uc/UC-026.md) | Platform-Neutral Fallback Pipeline | P1 | L |
 
 ---
 
@@ -87,6 +88,7 @@ The following ADRs must be resolved before implementing the corresponding UCs:
 | [ADR-006](../adr/ADR-006.md) | Input capture mechanism per platform | [UC-009](../uc/UC-009.md), [UC-010](../uc/UC-010.md), [UC-011](../uc/UC-011.md) |
 | [ADR-007](../adr/ADR-007.md) | Security model (encryption, authentication, trust) | [UC-016](../uc/UC-016.md) |
 | [ADR-008](../adr/ADR-008.md) | Android client UX design and platform trade-offs | [UC-022](../uc/UC-022.md) |
+| [ADR-009](../adr/ADR-009.md) | Platform-neutral fallback pipeline strategy | [UC-026](../uc/UC-026.md) |
 
 ---
 
