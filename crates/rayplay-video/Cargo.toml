@@ -13,6 +13,11 @@ wgpu.workspace              = true
 crossbeam-channel.workspace = true
 pollster.workspace          = true
 
+# Optional fallback dependencies
+scrap = { version = "0.5", optional = true }
+openh264 = { version = "0.6", optional = true }
+ffmpeg-next = { version = "6.1", optional = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Graphics_Direct3D",
@@ -27,6 +32,8 @@ metal = { workspace = true }
 objc  = { workspace = true }
 
 [features]
+default = ["fallback"]
+
 ## Enable hardware-accelerated codec tests (VtDecoder on Apple Silicon, NvencEncoder on Windows).
 ## Requires appropriate hardware. Only enabled on self-hosted CI runners.
 hw-codec-tests = []
@@ -34,6 +41,14 @@ hw-codec-tests = []
 ## Enable rendering tests that require a GPU and a window handle.
 ## On standard CI (GitHub Actions macOS), the event loop cannot be driven headlessly.
 hw-render-tests = []
+
+## Enable fallback software implementations using scrap and openh264.
+## Default-enabled for broader platform compatibility.
+fallback = ["dep:scrap", "dep:openh264"]
+
+## Enable FFmpeg-based fallback implementations for advanced codec support.
+## Opt-in due to FFmpeg's complex build requirements.
+ffmpeg-fallback = ["dep:ffmpeg-next"]
 
 [dev-dependencies]
 criterion.workspace  = true

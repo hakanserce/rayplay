@@ -113,7 +113,7 @@ pub async fn connect(
     frame_tx: crossbeam_channel::Sender<rayplay_video::DecodedFrame>,
     token: CancellationToken,
 ) -> Result<()> {
-    use rayplay_video::VtDecoder;
+    use rayplay_video::{Codec, create_decoder};
 
     let cert_bytes = config.load_cert_bytes()?;
     let server_addr = config.server_addr;
@@ -121,9 +121,10 @@ pub async fn connect(
     connect_with_reconnect(server_addr, cert_bytes, token, |transport, child| {
         let frame_tx = frame_tx.clone();
         async move {
-            let decoder = VtDecoder::new()
+            // Default to HEVC for now; could be made configurable in the future
+            let decoder = create_decoder(Codec::Hevc)
                 .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
-            super::receive::run_receive_loop(transport, Box::new(decoder), frame_tx, child).await
+            super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
         }
     })
     .await
