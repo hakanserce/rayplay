@@ -31,24 +31,14 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: $ runner.os -cargo-$ hashFiles('**/Cargo.lock') 
+          key: $ runner.os -cargo-$ hashFiles('**/Cargo.lock')
           restore-keys: $ runner.os -cargo-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Install cargo-make
+        uses: taiki-e/install-action@cargo-make
 
-      - name: Run clippy (pedantic)
-        run: cargo clippy --workspace -- -W clippy::pedantic
-
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Check code coverage
-        run: |
-          cargo llvm-cov --workspace --fail-under-lines 99
+      - name: Run CI pipeline
+        run: cargo make ci
 
   benchmark:
     name: Benchmarks
@@ -57,5 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-make
+        uses: taiki-e/install-action@cargo-make
       - name: Run benchmarks
-        run: cargo bench --workspace -- --output-format bencher
+        run: cargo make benchmark
