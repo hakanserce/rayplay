@@ -95,6 +95,76 @@ fn bench_bitrate_resolve(c: &mut Criterion) {
     });
 }
 
+// ── NVENC zero-copy benchmarks (Windows + hw-codec-tests only) ────────────────
+
+#[cfg(all(target_os = "windows", feature = "hw-codec-tests"))]
+fn bench_nvenc_zero_copy_1080p60(c: &mut Criterion) {
+    use std::sync::Arc;
+
+    use rayplay_video::{
+        CaptureConfig, EncoderInput, SharedD3D11Device, capture::ZeroCopyCapturer,
+        dxgi_capture::DxgiCapture, nvenc::NvencEncoder,
+    };
+
+    let device = Arc::new(SharedD3D11Device::new().expect("D3D11 device"));
+    let cap_config = CaptureConfig {
+        target_fps: 60,
+        acquire_timeout_ms: 100,
+    };
+    let capturer = DxgiCapture::new(cap_config, device.clone()).expect("DXGI capture");
+    let enc_config = EncoderConfig::new(1920, 1080, 60);
+    let mut encoder = NvencEncoder::new(enc_config).expect("NVENC encoder");
+
+    c.bench_function("nvenc_zero_copy_1080p60", |b| {
+        b.iter(|| {
+            let texture = capturer.acquire_texture().expect("acquire");
+            let input = EncoderInput::GpuTexture {
+                handle: texture.texture_ptr,
+                width: texture.width,
+                height: texture.height,
+                timestamp_us: 0,
+            };
+            let result = encoder.encode(input);
+            capturer.release_frame();
+            black_box(result)
+        });
+    });
+}
+
+#[cfg(all(target_os = "windows", feature = "hw-codec-tests"))]
+fn bench_nvenc_zero_copy_4k60(c: &mut Criterion) {
+    use std::sync::Arc;
+
+    use rayplay_video::{
+        CaptureConfig, EncoderInput, SharedD3D11Device, capture::ZeroCopyCapturer,
+        dxgi_capture::DxgiCapture, nvenc::NvencEncoder,
+    };
+
+    let device = Arc::new(SharedD3D11Device::new().expect("D3D11 device"));
+    let cap_config = CaptureConfig {
+        target_fps: 60,
+        acquire_timeout_ms: 100,
+    };
+    let capturer = DxgiCapture::new(cap_config, device.clone()).expect("DXGI capture");
+    let enc_config = EncoderConfig::new(3840, 2160, 60);
+    let mut encoder = NvencEncoder::new(enc_config).expect("NVENC encoder");
+
+    c.bench_function("nvenc_zero_copy_4k60", |b| {
+        b.iter(|| {
+            let texture = capturer.acquire_texture().expect("acquire");
+            let input = EncoderInput::GpuTexture {
+                handle: texture.texture_ptr,
+                width: texture.width,
+                height: texture.height,
+                timestamp_us: 0,
+            };
+            let result = encoder.encode(input);
+            capturer.release_frame();
+            black_box(result)
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_auto_bitrate,

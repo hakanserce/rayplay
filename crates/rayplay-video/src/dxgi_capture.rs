@@ -1,24 +1,23 @@
 /// DXGI Desktop Duplication screen capturer (Windows only).
 ///
 /// Captures the primary monitor by acquiring frames from the
-/// `IDXGIOutputDuplication` interface, copying each DirectX texture to a
-/// CPU-readable staging texture, and returning the raw BGRA pixel data.
+/// `IDXGIOutputDuplication` interface.  Supports two capture modes:
 ///
-/// This is the foundation for the zero-copy pipeline described in ADR-001.
-/// The current implementation uses one copy (GPU texture → staging texture →
-/// host memory, i.e. Option A in ADR-001). Option B (NVENC direct from DXGI
-/// texture) will be wired in during UC-002 once the NVENC encoder is ready.
+/// - **CPU readback** ([`ScreenCapturer`]): copies to a staging texture then
+///   maps into host memory (ADR-001 Option A).
+/// - **Zero-copy** ([`ZeroCopyCapturer`]): returns the GPU texture pointer
+///   directly for NVENC to consume (ADR-001 Option B).
 #[cfg(target_os = "windows")]
 mod inner {
+    use std::ffi::c_void;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use tracing::{debug, instrument};
     use windows::{
-        Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE,
         Win32::Graphics::Direct3D11::{
-            D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_SDK_VERSION,
-            D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
-            ID3D11DeviceContext, ID3D11Texture2D,
+            D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_STAGING, ID3D11Texture2D,
         },
         Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
         Win32::Graphics::Dxgi::{
@@ -27,9 +26,16 @@ mod inner {
         core::Interface as _,
     };
 
-    use crate::capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};
+    use crate::capture::{
+        CaptureConfig, CaptureError, CapturedFrame, CapturedTexture, ScreenCapturer,
+        ZeroCopyCapturer,
+    };
+    use crate::d3d11_device::SharedD3D11Device;
 
     /// Screen capturer backed by DXGI Desktop Duplication.
+    ///
+    /// Shares a [`SharedD3D11Device`] with the NVENC encoder so that
+    /// textures acquired here can be registered directly for encoding.
     ///
     /// # Safety
     ///
@@ -37,8 +43,7 @@ mod inner {
     /// struct.  The capture loop in `rayplay-cli` runs on a single dedicated
     /// thread, satisfying this invariant.
     pub struct DxgiCapture {
-        device: ID3D11Device,
-        context: ID3D11DeviceContext,
+        device: Arc<SharedD3D11Device>,
         duplication: IDXGIOutputDuplication,
         width: u32,
         height: u32,
@@ -49,20 +54,21 @@ mod inner {
     unsafe impl Send for DxgiCapture {}
 
     impl DxgiCapture {
-        /// Creates a new `DxgiCapture` for the primary display.
+        /// Creates a new `DxgiCapture` for the primary display using a shared device.
         ///
         /// # Errors
         ///
-        /// Returns [`CaptureError::InitializationFailed`] if device creation or
-        /// output duplication setup fails.
-        #[instrument(skip(config))]
-        pub fn new(config: CaptureConfig) -> Result<Self, CaptureError> {
-            let (device, context) = create_d3d11_device()?;
-            let (duplication, width, height) = create_duplication(&device)?;
+        /// Returns [`CaptureError::InitializationFailed`] if output duplication
+        /// setup fails.
+        #[instrument(skip_all)]
+        pub fn new(
+            config: CaptureConfig,
+            device: Arc<SharedD3D11Device>,
+        ) -> Result<Self, CaptureError> {
+            let (duplication, width, height) = create_duplication(device.device())?;
             debug!(width, height, fps = config.target_fps, "DXGI capture ready");
             Ok(Self {
                 device,
-                context,
                 duplication,
                 width,
                 height,
@@ -76,22 +82,18 @@ mod inner {
         fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
             let timestamp = Instant::now();
 
-            // 1. Acquire the next changed desktop frame.
             let desktop_texture = acquire_frame(&self.duplication, self.timeout_ms)?;
 
-            // 2. Copy to a CPU-readable staging texture.
             let staging = copy_to_staging(
-                &self.device,
-                &self.context,
+                self.device.device(),
+                self.device.context(),
                 &desktop_texture,
                 self.width,
                 self.height,
             )?;
 
-            // 3. Map staging texture and read bytes.
-            let (stride, data) = map_and_read(&self.context, &staging, self.height)?;
+            let (stride, data) = map_and_read(self.device.context(), &staging, self.height)?;
 
-            // 4. Release the duplication frame now that we have the data.
             unsafe {
                 let _ = self.duplication.ReleaseFrame();
             }
@@ -110,34 +112,41 @@ mod inner {
         }
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    impl ZeroCopyCapturer for DxgiCapture {
+        fn acquire_texture(&self) -> Result<CapturedTexture, CaptureError> {
+            let desktop_texture = acquire_frame(&self.duplication, self.timeout_ms)?;
 
-    fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureError> {
-        let mut device = None;
-        let mut context = None;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                None,
-                Default::default(),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-            .map_err(|e| CaptureError::InitializationFailed(e.to_string()))?;
+            // Return the texture pointer directly — no CopyResource, no map.
+            let texture_ptr: *mut c_void =
+                &desktop_texture as *const ID3D11Texture2D as *mut ID3D11Texture2D as *mut c_void;
+
+            // Keep the texture alive by leaking it into a raw pointer.
+            // The caller must call release_frame() after encoding.
+            std::mem::forget(desktop_texture);
+
+            Ok(CapturedTexture {
+                texture_ptr,
+                width: self.width,
+                height: self.height,
+                timestamp_us: 0, // caller sets real timestamp from session_start
+            })
         }
-        let device = device
-            .ok_or_else(|| CaptureError::InitializationFailed("D3D11 device was null".into()))?;
-        let context = context
-            .ok_or_else(|| CaptureError::InitializationFailed("D3D11 context was null".into()))?;
-        Ok((device, context))
+
+        fn release_frame(&self) {
+            unsafe {
+                let _ = self.duplication.ReleaseFrame();
+            }
+        }
+
+        fn resolution(&self) -> (u32, u32) {
+            (self.width, self.height)
+        }
     }
 
+    // ── helpers ───────────────────────────────────────────────────────────────
+
     fn create_duplication(
-        device: &ID3D11Device,
+        device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     ) -> Result<(IDXGIOutputDuplication, u32, u32), CaptureError> {
         unsafe {
             let dxgi_device: IDXGIDevice = device
@@ -192,8 +201,8 @@ mod inner {
     }
 
     fn copy_to_staging(
-        device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
+        device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+        context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         src: &ID3D11Texture2D,
         width: u32,
         height: u32,
@@ -226,7 +235,7 @@ mod inner {
     }
 
     fn map_and_read(
-        context: &ID3D11DeviceContext,
+        context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         texture: &ID3D11Texture2D,
         height: u32,
     ) -> Result<(u32, Vec<u8>), CaptureError> {

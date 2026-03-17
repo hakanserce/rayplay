@@ -25,8 +25,7 @@
 #[cfg(target_os = "windows")]
 mod windows {
     use crate::{
-        encoder::{EncoderConfig, VideoEncoder, VideoError},
-        frame::RawFrame,
+        encoder::{EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         packet::EncodedPacket,
     };
 
@@ -82,23 +81,32 @@ mod windows {
     }
 
     impl VideoEncoder for NvencEncoder {
-        fn encode(&mut self, frame: &RawFrame) -> Result<Option<EncodedPacket>, VideoError> {
-            if frame.width != self.config.width || frame.height != self.config.height {
-                return Err(VideoError::InvalidDimensions {
-                    width: frame.width,
-                    height: frame.height,
-                });
+        fn encode(&mut self, input: EncoderInput<'_>) -> Result<Option<EncodedPacket>, VideoError> {
+            let (width, height) = match &input {
+                EncoderInput::Cpu(frame) => (frame.width, frame.height),
+                EncoderInput::GpuTexture { width, height, .. } => (*width, *height),
+            };
+
+            if width != self.config.width || height != self.config.height {
+                return Err(VideoError::InvalidDimensions { width, height });
             }
 
             // TODO(UC-002): Submit frame to NVENC:
             //
-            //   1. Map DXGI texture via NvEncMapInputResource (zero-copy)
-            //      or lock input buffer and copy for the CPU-copy fallback.
-            //   2. NvEncEncodePicture — submit to encoder pipeline.
-            //   3. Poll / wait on output event object.
-            //   4. NvEncLockBitstream — get pointer to encoded NAL data.
-            //   5. Copy NAL bytes into EncodedPacket::data.
-            //   6. NvEncUnlockBitstream — release output buffer.
+            // For EncoderInput::GpuTexture (zero-copy path):
+            //   1. Register texture if not cached: NvEncRegisterResource
+            //   2. NvEncMapInputResource -> get mapped input buffer
+            //   3. NvEncEncodePicture -> GPU-to-GPU encode
+            //   4. NvEncUnmapInputResource
+            //   5. NvEncLockBitstream -> read encoded NAL bytes
+            //   6. NvEncUnlockBitstream
+            //
+            // For EncoderInput::Cpu (fallback path):
+            //   1. NvEncLockInputBuffer
+            //   2. memcpy frame data
+            //   3. NvEncUnlockInputBuffer
+            //   4. NvEncEncodePicture
+            //   5. Lock/unlock bitstream as above
             //
             // Placeholder: signal that the session isn't connected yet.
             Err(VideoError::EncodingFailed {
