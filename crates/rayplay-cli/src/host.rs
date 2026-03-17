@@ -5,6 +5,8 @@ use std::{future::Future, net::SocketAddr};
 use anyhow::Result;
 use clap::Parser;
 use rayplay_network::{QuicListener, QuicVideoTransport};
+#[cfg(target_os = "windows")]
+use rayplay_video::encoder::GpuTextureHandle;
 use rayplay_video::encoder::{Bitrate, EncoderConfig};
 #[cfg(any(target_os = "windows", test))]
 use rayplay_video::{
@@ -299,15 +301,23 @@ pub(crate) fn drive_zero_copy_encode_loop(
         let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
         tracing::debug!(timestamp_us = ts, "zero_copy_frame_captured");
 
+        // RAII guard ensures `release_frame` is called even if `encode` panics.
+        struct FrameGuard<'c, C: rayplay_video::capture::ZeroCopyCapturer>(&'c C);
+        impl<C: rayplay_video::capture::ZeroCopyCapturer> Drop for FrameGuard<'_, C> {
+            fn drop(&mut self) {
+                self.0.release_frame();
+            }
+        }
+        let _guard = FrameGuard(&capturer);
+
         let input = EncoderInput::GpuTexture {
-            handle: texture.texture_ptr,
+            handle: GpuTextureHandle(texture.texture_ptr),
             width: texture.width,
             height: texture.height,
             timestamp_us: ts,
         };
 
         let result = encoder.encode(input);
-        capturer.release_frame();
 
         match result {
             Ok(Some(pkt)) => {

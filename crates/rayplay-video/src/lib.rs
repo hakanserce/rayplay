@@ -46,7 +46,8 @@ pub use d3d11_device::SharedD3D11Device;
 pub use decoded_frame::{DecodedFrame, PixelFormat};
 pub use decoder::VideoDecoder;
 pub use encoder::{
-    Bitrate, Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError, create_encoder,
+    Bitrate, Codec, EncoderConfig, EncoderInput, GpuTextureHandle, VideoEncoder, VideoError,
+    create_encoder,
 };
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;

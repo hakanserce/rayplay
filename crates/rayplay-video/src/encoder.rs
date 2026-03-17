@@ -4,14 +4,31 @@ use thiserror::Error;
 
 use crate::{frame::RawFrame, packet::EncodedPacket};
 
+/// Opaque handle to a GPU-resident texture for zero-copy encoding.
+///
+/// On Windows, wraps a `*mut ID3D11Texture2D` COM pointer transferred from
+/// [`ZeroCopyCapturer::acquire_texture`].  The resource must remain valid
+/// (i.e. the DXGI frame must not be released) until the encoder has consumed
+/// it and [`ZeroCopyCapturer::release_frame`] has been called.
+#[repr(transparent)]
+pub struct GpuTextureHandle(pub *mut std::ffi::c_void);
+
+// SAFETY: only accessed on the single encoding thread that owns the D3D11 context.
+unsafe impl Send for GpuTextureHandle {}
+
+impl fmt::Debug for GpuTextureHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GpuTextureHandle({:p})", self.0)
+    }
+}
+
 /// Input for a video encoder — CPU pixels or GPU-resident texture.
 pub enum EncoderInput<'a> {
     /// CPU-accessible raw pixel data (ADR-001 Option A fallback).
     Cpu(&'a RawFrame),
     /// Opaque GPU texture handle (zero-copy ADR-001 Option B).
-    /// On Windows: `*mut c_void` pointing to `ID3D11Texture2D`.
     GpuTexture {
-        handle: *mut std::ffi::c_void,
+        handle: GpuTextureHandle,
         width: u32,
         height: u32,
         timestamp_us: u64,
@@ -33,7 +50,7 @@ impl fmt::Debug for EncoderInput<'_> {
                 timestamp_us,
             } => f
                 .debug_struct("GpuTexture")
-                .field("handle", &format_args!("{handle:p}"))
+                .field("handle", handle)
                 .field("width", width)
                 .field("height", height)
                 .field("timestamp_us", timestamp_us)
@@ -372,7 +389,7 @@ mod tests {
     #[test]
     fn test_encoder_input_gpu_texture_construction_with_null_pointer() {
         let input = EncoderInput::GpuTexture {
-            handle: std::ptr::null_mut(),
+            handle: GpuTextureHandle(std::ptr::null_mut()),
             width: 1920,
             height: 1080,
             timestamp_us: 100,
@@ -384,7 +401,7 @@ mod tests {
                 height,
                 timestamp_us,
             } => {
-                assert!(handle.is_null());
+                assert!(handle.0.is_null());
                 assert_eq!(width, 1920);
                 assert_eq!(height, 1080);
                 assert_eq!(timestamp_us, 100);
@@ -404,7 +421,7 @@ mod tests {
     #[test]
     fn test_encoder_input_debug_gpu_texture_variant() {
         let input = EncoderInput::GpuTexture {
-            handle: std::ptr::null_mut(),
+            handle: GpuTextureHandle(std::ptr::null_mut()),
             width: 3840,
             height: 2160,
             timestamp_us: 999,
@@ -423,6 +440,19 @@ mod tests {
     }
 
     #[test]
+    fn test_gpu_texture_handle_debug_shows_pointer() {
+        let h = GpuTextureHandle(std::ptr::null_mut());
+        let dbg = format!("{h:?}");
+        assert!(dbg.contains("GpuTextureHandle"));
+    }
+
+    #[test]
+    fn test_gpu_texture_handle_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<GpuTextureHandle>();
+    }
+
+    #[test]
     fn test_null_encoder_rejects_gpu_texture_input() {
         let config = EncoderConfig::new(1920, 1080, 60);
         let mut enc = NullEncoder {
@@ -430,7 +460,7 @@ mod tests {
             return_packet: true,
         };
         let input = EncoderInput::GpuTexture {
-            handle: std::ptr::null_mut(),
+            handle: GpuTextureHandle(std::ptr::null_mut()),
             width: 1920,
             height: 1080,
             timestamp_us: 0,

@@ -55,13 +55,15 @@ impl CapturedFrame {
 /// Duplication.  The caller **must** call
 /// [`ZeroCopyCapturer::release_frame`] after the encoder has consumed
 /// the texture.
+///
+/// Timestamp is not a property of the captured texture itself — the caller
+/// assigns a session-relative timestamp when constructing [`EncoderInput`].
 #[cfg(target_os = "windows")]
 pub struct CapturedTexture {
     /// Opaque pointer to `ID3D11Texture2D`.
     pub texture_ptr: *mut std::ffi::c_void,
     pub width: u32,
     pub height: u32,
-    pub timestamp_us: u64,
 }
 
 // SAFETY: same single-thread model as DxgiCapture — the pointer is only

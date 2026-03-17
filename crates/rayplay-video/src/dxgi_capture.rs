@@ -9,22 +9,21 @@
 ///   directly for NVENC to consume (ADR-001 Option B).
 #[cfg(target_os = "windows")]
 mod inner {
+    use std::cell::Cell;
     use std::ffi::c_void;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use tracing::{debug, instrument};
-    use windows::{
-        Win32::Graphics::Direct3D11::{
-            D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
-            D3D11_USAGE_STAGING, ID3D11Texture2D,
-        },
-        Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
-        Win32::Graphics::Dxgi::{
-            DXGI_ERROR_WAIT_TIMEOUT, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication,
-        },
-        core::Interface as _,
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
     };
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_ERROR_WAIT_TIMEOUT, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication,
+    };
+    use windows::core::Interface as _;
 
     use crate::capture::{
         CaptureConfig, CaptureError, CapturedFrame, CapturedTexture, ScreenCapturer,
@@ -42,12 +41,21 @@ mod inner {
     /// All D3D11 / DXGI calls must originate from the thread that owns this
     /// struct.  The capture loop in `rayplay-cli` runs on a single dedicated
     /// thread, satisfying this invariant.
+    ///
+    /// `device` is wrapped in `Arc` for shared ownership with the encoder.
+    /// Despite `Arc` normally implying `Sync`, both `DxgiCapture` and
+    /// `NvencEncoder` access the device only from this same single thread —
+    /// `SharedD3D11Device` is `Send` but intentionally not `Sync`.
     pub struct DxgiCapture {
         device: Arc<SharedD3D11Device>,
         duplication: IDXGIOutputDuplication,
         width: u32,
         height: u32,
         timeout_ms: u32,
+        /// Raw COM pointer to the most recently acquired DXGI texture.
+        /// Non-null between `acquire_texture()` and `release_frame()`.
+        /// Uses `Cell` so both methods can take `&self` (single-thread invariant).
+        pending_texture: Cell<*mut c_void>,
     }
 
     // SAFETY: see doc comment above — callers must not share across threads.
@@ -73,6 +81,7 @@ mod inner {
                 width,
                 height,
                 timeout_ms: config.acquire_timeout_ms,
+                pending_texture: Cell::new(std::ptr::null_mut()),
             })
         }
     }
@@ -113,28 +122,36 @@ mod inner {
     }
 
     impl ZeroCopyCapturer for DxgiCapture {
+        /// Acquires the next frame and returns its GPU texture pointer.
+        ///
+        /// Transfers COM ownership to `pending_texture` via `into_raw()`,
+        /// keeping the refcount alive until `release_frame()` reconstructs
+        /// and drops the object.
         fn acquire_texture(&self) -> Result<CapturedTexture, CaptureError> {
             let desktop_texture = acquire_frame(&self.duplication, self.timeout_ms)?;
-
-            // Return the texture pointer directly — no CopyResource, no map.
-            let texture_ptr: *mut c_void =
-                &desktop_texture as *const ID3D11Texture2D as *mut ID3D11Texture2D as *mut c_void;
-
-            // Keep the texture alive by leaking it into a raw pointer.
-            // The caller must call release_frame() after encoding.
-            std::mem::forget(desktop_texture);
-
+            // Transfer COM ownership to a raw pointer — refcount stays alive.
+            let raw = desktop_texture.into_raw();
+            self.pending_texture.set(raw);
             Ok(CapturedTexture {
-                texture_ptr,
+                texture_ptr: raw,
                 width: self.width,
                 height: self.height,
-                timestamp_us: 0, // caller sets real timestamp from session_start
             })
         }
 
+        /// Releases the pending DXGI frame.
+        ///
+        /// Reconstructs the `ID3D11Texture2D` from the stored raw pointer
+        /// (decrementing the COM refcount on drop), then calls `ReleaseFrame`
+        /// to return the frame to the duplication API.
         fn release_frame(&self) {
-            unsafe {
-                let _ = self.duplication.ReleaseFrame();
+            let raw = self.pending_texture.replace(std::ptr::null_mut());
+            if !raw.is_null() {
+                unsafe {
+                    // Reconstruct + drop — this calls Release() on the COM object.
+                    drop(ID3D11Texture2D::from_raw(raw));
+                    let _ = self.duplication.ReleaseFrame();
+                }
             }
         }
 
@@ -146,7 +163,7 @@ mod inner {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn create_duplication(
-        device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+        device: &ID3D11Device,
     ) -> Result<(IDXGIOutputDuplication, u32, u32), CaptureError> {
         unsafe {
             let dxgi_device: IDXGIDevice = device
@@ -201,8 +218,8 @@ mod inner {
     }
 
     fn copy_to_staging(
-        device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-        context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
         src: &ID3D11Texture2D,
         width: u32,
         height: u32,
@@ -235,7 +252,7 @@ mod inner {
     }
 
     fn map_and_read(
-        context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+        context: &ID3D11DeviceContext,
         texture: &ID3D11Texture2D,
         height: u32,
     ) -> Result<(u32, Vec<u8>), CaptureError> {
