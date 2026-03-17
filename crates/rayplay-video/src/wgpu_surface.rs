@@ -1,7 +1,9 @@
-//! Surface-backed `WgpuRenderer` constructor (UC-005, ADR-005).
+//! Surface-backed `WgpuRenderer` constructor and surface-specific operations
+//! (UC-005, ADR-005).
 //!
-//! This module contains only [`WgpuRenderer::new`], which initialises the
-//! GPU renderer for a live `winit` window.
+//! This module contains [`WgpuRenderer::new`] (surface renderer constructor),
+//! [`WgpuRenderer::apply_resize`] (swap-chain resize), and
+//! [`WgpuRenderer::present_to_surface`] (surface frame presentation).
 //!
 //! # Coverage exclusion
 //!
@@ -26,7 +28,10 @@ use winit::window::Window;
 
 use crate::{
     renderer::RenderError,
-    wgpu_renderer::{RendererOutput, WgpuRenderer, select_present_mode, select_surface_format},
+    wgpu_renderer::{
+        RendererOutput, WgpuRenderer, select_present_mode, select_surface_format,
+        surface_error_to_render_error,
+    },
 };
 
 impl WgpuRenderer {
@@ -102,6 +107,40 @@ impl WgpuRenderer {
         };
         surface.configure(&device, &config);
         let output = RendererOutput::Surface { surface, config };
-        Ok(Self::from_parts(device, queue, output))
+        Ok(Self::from_parts(device, queue, output, format))
+    }
+
+    /// Reconfigures the swap chain after a window resize.
+    ///
+    /// No-op when `self.output` is `Offscreen`.
+    pub(crate) fn apply_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if let RendererOutput::Surface { surface, config } = &mut self.output {
+            config.width = new_size.width.max(1);
+            config.height = new_size.height.max(1);
+            surface.configure(&self.device, &*config);
+        }
+    }
+
+    /// Acquires the next swap-chain frame, encodes, and presents it.
+    ///
+    /// Called from [`WgpuRenderer::present_frame`] after the offscreen path
+    /// has already returned — so `self.output` is always `Surface` here.
+    pub(crate) fn present_to_surface(
+        &mut self,
+        hw_bind_group: Option<&wgpu::BindGroup>,
+    ) -> Result<(), RenderError> {
+        let RendererOutput::Surface { surface, .. } = &self.output else {
+            return Ok(());
+        };
+        let output = surface
+            .get_current_texture()
+            .map_err(|e| surface_error_to_render_error(&e))?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let cmd = self.encode_frame(&view, hw_bind_group);
+        self.queue.submit(std::iter::once(cmd));
+        output.present();
+        Ok(())
     }
 }

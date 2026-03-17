@@ -20,6 +20,8 @@ wgpu              = "22"
 crossbeam-channel = "0.5"
 pollster          = "0.3"
 tokio-util        = { version = "0.7", features = ["rt"] }
+metal             = "0.29"
+objc              = "0.2"
 
 [profile.dev]
 opt-level = 0

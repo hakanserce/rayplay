@@ -81,11 +81,7 @@ where
                 if token.is_cancelled() {
                     return Ok(());
                 }
-                tracing::info!(
-                    error = %e,
-                    backoff_ms,
-                    "Connection failed, retrying"
-                );
+                tracing::info!(error = %e, backoff_ms, "Connection failed, retrying");
             }
         }
 

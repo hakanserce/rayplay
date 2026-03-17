@@ -47,12 +47,9 @@ mod macos {
     };
 
     #[cfg(feature = "hw-codec-tests")]
-    use crate::decoded_frame::PixelFormat;
+    use crate::decoded_frame::{IoSurfaceHandle, PixelFormat};
 
     // ── Hardware-only FFI (compiled only with --features hw-codec-tests) ────────
-
-    #[cfg(feature = "hw-codec-tests")]
-    use std::slice;
 
     /// Mirrors `CMTime` from `CoreMedia`. Must match the C layout exactly.
     #[cfg(feature = "hw-codec-tests")]
@@ -211,13 +208,13 @@ mod macos {
             pixel_buffer: *mut c_void,
             plane_index: usize,
         ) -> usize;
-        fn CVPixelBufferLockBaseAddress(pixel_buffer: *mut c_void, lock_flags: u64) -> i32;
-        fn CVPixelBufferUnlockBaseAddress(pixel_buffer: *mut c_void, unlock_flags: u64) -> i32;
-        fn CVPixelBufferGetBaseAddressOfPlane(
-            pixel_buffer: *mut c_void,
-            plane_index: usize,
-        ) -> *mut c_void;
-        fn CVPixelBufferGetDataSize(pixel_buffer: *mut c_void) -> usize;
+        fn CVPixelBufferGetIOSurface(pixel_buffer: *mut c_void) -> *mut c_void;
+    }
+
+    #[cfg(feature = "hw-codec-tests")]
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRetain(cf: *const c_void) -> *const c_void;
     }
 
     // ── Annex B → HVCC conversion (always compiled, fully testable) ───────────
@@ -517,17 +514,11 @@ mod macos {
             Ok(Some(frame))
         }
 
-        /// Copies pixel data from a `CVPixelBuffer` into a `DecodedFrame`.
+        /// Extracts the `IOSurface` from a `CVPixelBuffer` and wraps it in a
+        /// hardware-backed `DecodedFrame` for zero-copy GPU rendering (ADR-005).
         ///
-        /// # Note — scaffolding
-        ///
-        /// This currently copies the pixel data out of the `CVPixelBuffer` via
-        /// `CVPixelBufferLockBaseAddress`. The intended path (UC-005) is zero-copy
-        /// `IOSurface` interop: call `new_hardware` and hand the surface handle to
-        /// the wgpu renderer as an external texture, bypassing the CPU entirely.
-        ///
-        /// TODO(#40): replace with `DecodedFrame::new_hardware` + `IOSurface`
-        /// handle so the renderer can import the surface directly (ADR-005).
+        /// No CPU copy occurs — the `IOSurface` is `CFRetain`ed and handed to
+        /// the renderer, which imports it as a Metal texture.
         ///
         /// Only available with `--features hw-codec-tests`.
         #[cfg(feature = "hw-codec-tests")]
@@ -536,46 +527,37 @@ mod macos {
             pixel_buffer: *mut c_void,
             timestamp_us: u64,
         ) -> Result<DecodedFrame, VideoError> {
-            // SAFETY: pixel_buffer is a valid CVPixelBufferRef for the duration of
-            // this function. Lock/unlock calls are balanced.
-            let (width, height) = unsafe {
+            // SAFETY: pixel_buffer is a valid CVPixelBufferRef.
+            let (width, height, stride) = unsafe {
                 (
                     CVPixelBufferGetWidth(pixel_buffer) as u32,
                     CVPixelBufferGetHeight(pixel_buffer) as u32,
+                    CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0) as u32,
                 )
             };
-            // SAFETY: pixel_buffer is valid.
-            let lock_status = unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, 0) };
-            if lock_status != 0 {
+
+            // SAFETY: pixel_buffer is a valid CVPixelBufferRef backed by an IOSurface.
+            let iosurface_ptr = unsafe { CVPixelBufferGetIOSurface(pixel_buffer) };
+            if iosurface_ptr.is_null() {
                 return Err(VideoError::DecodingFailed {
-                    reason: format!("CVPixelBufferLockBaseAddress failed: {lock_status}"),
+                    reason: "CVPixelBufferGetIOSurface returned null".to_string(),
                 });
             }
 
-            // SAFETY: base address is locked; plane 0 is the luma plane.
-            let stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0) } as u32;
-            // SAFETY: data size is valid after locking.
-            let data_size = unsafe { CVPixelBufferGetDataSize(pixel_buffer) };
-            // SAFETY: base address of plane 0 is valid after locking.
-            let base_ptr = unsafe { CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0) };
+            // The IOSurface is owned by the pixel buffer; retain our own reference.
+            // SAFETY: iosurface_ptr is a valid IOSurfaceRef.
+            unsafe { CFRetain(iosurface_ptr.cast_const()) };
 
-            let data = if base_ptr.is_null() || data_size == 0 {
-                vec![]
-            } else {
-                // SAFETY: base_ptr points to data_size bytes of valid pixel data.
-                unsafe { slice::from_raw_parts(base_ptr.cast::<u8>(), data_size).to_vec() }
-            };
+            // SAFETY: we just retained the IOSurface above.
+            let handle = unsafe { IoSurfaceHandle::from_retained(iosurface_ptr) };
 
-            // SAFETY: pixel_buffer is valid; must be unlocked after lock.
-            unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, 0) };
-
-            Ok(DecodedFrame::new_cpu(
-                data,
+            Ok(DecodedFrame::new_hardware(
                 width,
                 height,
                 stride,
                 PixelFormat::Nv12,
                 timestamp_us,
+                handle,
             ))
         }
     }
@@ -717,6 +699,20 @@ mod macos {
             let input = [
                 0x00u8, 0x00, 0x00, 0x01, 0x40, // VPS
                 0x00, 0x00, 0x00, 0x01, 0x42, // SPS
+            ];
+            let nals = split_nal_units(&input);
+            assert_eq!(nals.len(), 2);
+            assert_eq!(nals[0], &[0x40u8]);
+            assert_eq!(nals[1], &[0x42u8]);
+        }
+
+        #[test]
+        fn test_split_nal_units_two_3byte_start_codes() {
+            // Both NAL units use 3-byte start codes; the second start code must
+            // push the first NAL (line 263 in split_nal_units).
+            let input = [
+                0x00u8, 0x00, 0x01, 0x40, // first NAL: 3-byte start + payload
+                0x00, 0x00, 0x01, 0x42, // second NAL: 3-byte start + payload
             ];
             let nals = split_nal_units(&input);
             assert_eq!(nals.len(), 2);
