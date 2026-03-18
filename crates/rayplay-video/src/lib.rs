@@ -44,7 +44,7 @@ pub use chunker::{DEFAULT_CHUNK_SIZE, FrameChunker, NetworkChunk};
 #[cfg(target_os = "windows")]
 pub use d3d11_device::SharedD3D11Device;
 pub use decoded_frame::{DecodedFrame, PixelFormat};
-pub use decoder::VideoDecoder;
+pub use decoder::{VideoDecoder, create_decoder};
 pub use encoder::{
     Bitrate, Codec, EncoderConfig, EncoderInput, GpuTextureHandle, VideoEncoder, VideoError,
     create_encoder,

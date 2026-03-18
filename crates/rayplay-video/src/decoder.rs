@@ -4,6 +4,28 @@ use crate::{
     packet::EncodedPacket,
 };
 
+/// Returns the platform-appropriate hardware decoder.
+///
+/// On macOS, returns a [`VtDecoder`](crate::videotoolbox::VtDecoder) backed
+/// by `VideoToolbox`.  On other platforms returns [`VideoError::UnsupportedPlatform`].
+///
+/// # Errors
+///
+/// Returns [`VideoError::UnsupportedPlatform`] on non-macOS, or
+/// [`VideoError::DecodingFailed`] if the `VideoToolbox` session cannot be created.
+pub fn create_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::videotoolbox::VtDecoder;
+        VtDecoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = codec;
+        Err(VideoError::UnsupportedPlatform)
+    }
+}
+
 /// Trait for hardware or software video decoders.
 ///
 /// Implementations must be `Send` so they can be driven from a dedicated
@@ -43,6 +65,7 @@ mod tests {
     // ── NullDecoder test double ────────────────────────────────────────────────
 
     struct NullDecoder {
+        codec: Codec,
         emit_frame: bool,
         fail_on_corrupt: bool,
     }
@@ -73,8 +96,34 @@ mod tests {
         }
 
         fn codec(&self) -> Codec {
-            Codec::Hevc
+            self.codec.clone()
         }
+    }
+
+    // ── create_decoder factory ─────────────────────────────────────────────────
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_create_decoder_unsupported_on_non_macos() {
+        let result = create_decoder(Codec::Hevc);
+        assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+
+        let result = create_decoder(Codec::H264);
+        assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_create_decoder_returns_vt_decoder_on_macos() {
+        let result = create_decoder(Codec::Hevc);
+        assert!(result.is_ok());
+        let decoder = result.unwrap();
+        assert_eq!(decoder.codec(), Codec::Hevc);
+
+        let result = create_decoder(Codec::H264);
+        assert!(result.is_ok());
+        let decoder = result.unwrap();
+        assert_eq!(decoder.codec(), Codec::H264);
     }
 
     // ── VideoDecoder trait contract ────────────────────────────────────────────
@@ -82,6 +131,7 @@ mod tests {
     #[test]
     fn test_video_decoder_decode_returns_frame() {
         let mut dec = NullDecoder {
+            codec: Codec::Hevc,
             emit_frame: true,
             fail_on_corrupt: false,
         };
@@ -95,6 +145,7 @@ mod tests {
     #[test]
     fn test_video_decoder_decode_returns_none_when_buffering() {
         let mut dec = NullDecoder {
+            codec: Codec::H264,
             emit_frame: false,
             fail_on_corrupt: false,
         };
@@ -105,6 +156,7 @@ mod tests {
     #[test]
     fn test_video_decoder_decode_rejects_corrupt_empty_packet() {
         let mut dec = NullDecoder {
+            codec: Codec::Hevc,
             emit_frame: false,
             fail_on_corrupt: true,
         };
@@ -116,6 +168,7 @@ mod tests {
     #[test]
     fn test_video_decoder_flush_returns_empty() {
         let mut dec = NullDecoder {
+            codec: Codec::H264,
             emit_frame: false,
             fail_on_corrupt: false,
         };
@@ -125,9 +178,20 @@ mod tests {
     #[test]
     fn test_video_decoder_codec_returns_hevc() {
         let dec = NullDecoder {
+            codec: Codec::Hevc,
             emit_frame: false,
             fail_on_corrupt: false,
         };
         assert_eq!(dec.codec(), Codec::Hevc);
+    }
+
+    #[test]
+    fn test_video_decoder_codec_returns_h264() {
+        let dec = NullDecoder {
+            codec: Codec::H264,
+            emit_frame: false,
+            fail_on_corrupt: false,
+        };
+        assert_eq!(dec.codec(), Codec::H264);
     }
 }

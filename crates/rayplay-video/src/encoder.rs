@@ -64,6 +64,8 @@ impl fmt::Debug for EncoderInput<'_> {
 pub enum Codec {
     /// H.265 / HEVC — default codec, hardware-accelerated on Nvidia RTX 2060+.
     Hevc,
+    /// H.264 / AVC — widely supported codec, hardware-accelerated on most GPUs.
+    H264,
 }
 
 /// Encoder bitrate setting.
@@ -78,26 +80,29 @@ pub enum Bitrate {
 impl Bitrate {
     /// Resolves the bitrate to bits per second for the given stream parameters.
     #[must_use]
-    pub fn resolve(&self, width: u32, height: u32, fps: u32) -> u32 {
+    pub fn resolve(&self, codec: &Codec, width: u32, height: u32, fps: u32) -> u32 {
         match self {
-            Self::Auto => compute_auto_bitrate(width, height, fps),
+            Self::Auto => compute_auto_bitrate(codec, width, height, fps),
             Self::Mbps(mbps) => mbps.saturating_mul(1_000_000),
         }
     }
 }
 
-/// Computes a HEVC bitrate heuristic from resolution and frame rate.
+/// Computes a codec-aware bitrate heuristic from resolution and frame rate.
 ///
-/// Targets approximately 6 Mbps at 1080p60 and 25 Mbps at 4K60,
-/// clamped between 1 Mbps and 100 Mbps.
+/// For HEVC: targets approximately 6 Mbps at 1080p60 and 25 Mbps at 4K60.
+/// For H.264: targets approximately 8 Mbps at 1080p60 and 33 Mbps at 4K60.
+/// Clamped between 1 Mbps and 100 Mbps for both codecs.
 ///
-/// Formula: `pixels * fps / COMPRESSION_FACTOR`, where the factor is
-/// tuned so that 1920×1080×60 / 20 ≈ 6 220 800 bps (~6 Mbps).
-fn compute_auto_bitrate(width: u32, height: u32, fps: u32) -> u32 {
-    // HEVC encodes ~20× more efficiently than raw pixel throughput (empirical).
-    const COMPRESSION_FACTOR: u64 = 20;
+/// Formula: `pixels * fps / COMPRESSION_FACTOR`, where the factor depends
+/// on the codec's compression efficiency.
+fn compute_auto_bitrate(codec: &Codec, width: u32, height: u32, fps: u32) -> u32 {
+    let compression_factor = match codec {
+        Codec::Hevc => 20, // HEVC encodes ~20× more efficiently than raw pixel throughput
+        Codec::H264 => 15, // H.264 encodes ~15× more efficiently than raw pixel throughput
+    };
     let pixels = u64::from(width) * u64::from(height);
-    let bps = pixels * u64::from(fps) / COMPRESSION_FACTOR;
+    let bps = pixels * u64::from(fps) / compression_factor;
     bps.clamp(1_000_000, 100_000_000) as u32
 }
 
@@ -129,6 +134,18 @@ impl EncoderConfig {
         }
     }
 
+    /// Creates a new config with the specified codec and auto bitrate.
+    #[must_use]
+    pub fn with_codec(width: u32, height: u32, fps: u32, codec: Codec) -> Self {
+        Self {
+            codec,
+            width,
+            height,
+            fps,
+            bitrate: Bitrate::Auto,
+        }
+    }
+
     /// Overrides the bitrate setting.
     #[must_use]
     pub fn with_bitrate(mut self, bitrate: Bitrate) -> Self {
@@ -139,7 +156,8 @@ impl EncoderConfig {
     /// Returns the resolved bitrate in bits per second.
     #[must_use]
     pub fn resolved_bitrate(&self) -> u32 {
-        self.bitrate.resolve(self.width, self.height, self.fps)
+        self.bitrate
+            .resolve(&self.codec, self.width, self.height, self.fps)
     }
 }
 
@@ -241,22 +259,67 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_config_with_codec_hevc() {
+        let cfg = EncoderConfig::with_codec(1920, 1080, 60, Codec::Hevc);
+        assert_eq!(cfg.codec, Codec::Hevc);
+        assert_eq!(cfg.width, 1920);
+        assert_eq!(cfg.height, 1080);
+        assert_eq!(cfg.fps, 60);
+        assert_eq!(cfg.bitrate, Bitrate::Auto);
+    }
+
+    #[test]
+    fn test_encoder_config_with_codec_h264() {
+        let cfg = EncoderConfig::with_codec(1280, 720, 30, Codec::H264);
+        assert_eq!(cfg.codec, Codec::H264);
+        assert_eq!(cfg.width, 1280);
+        assert_eq!(cfg.height, 720);
+        assert_eq!(cfg.fps, 30);
+        assert_eq!(cfg.bitrate, Bitrate::Auto);
+    }
+
+    #[test]
     fn test_encoder_config_with_bitrate_override() {
         let cfg = EncoderConfig::new(1920, 1080, 60).with_bitrate(Bitrate::Mbps(8));
         assert_eq!(cfg.bitrate, Bitrate::Mbps(8));
     }
 
     #[test]
-    fn test_encoder_config_resolved_bitrate_auto_1080p60() {
+    fn test_encoder_config_chained_methods() {
+        let cfg =
+            EncoderConfig::with_codec(1280, 720, 30, Codec::H264).with_bitrate(Bitrate::Mbps(5));
+        assert_eq!(cfg.codec, Codec::H264);
+        assert_eq!(cfg.bitrate, Bitrate::Mbps(5));
+        assert_eq!(cfg.width, 1280);
+        assert_eq!(cfg.height, 720);
+        assert_eq!(cfg.fps, 30);
+    }
+
+    #[test]
+    fn test_encoder_config_resolved_bitrate_auto_hevc_1080p60() {
         let cfg = EncoderConfig::new(1920, 1080, 60);
         let bps = cfg.resolved_bitrate();
-        // At 1080p60: 1920*1080*60/1500 ≈ 8_294_400 bps
+        // At 1080p60 with HEVC: 1920*1080*60/20 ≈ 6_220_800 bps
         assert!(bps >= 1_000_000, "bitrate below minimum: {bps}");
         assert!(bps <= 100_000_000, "bitrate above maximum: {bps}");
     }
 
     #[test]
-    fn test_encoder_config_resolved_bitrate_auto_4k60() {
+    fn test_encoder_config_resolved_bitrate_auto_h264_1080p60() {
+        let cfg = EncoderConfig::with_codec(1920, 1080, 60, Codec::H264);
+        let bps = cfg.resolved_bitrate();
+        // At 1080p60 with H.264: 1920*1080*60/15 ≈ 8_294_400 bps
+        assert!(bps >= 1_000_000, "bitrate below minimum: {bps}");
+        assert!(bps <= 100_000_000, "bitrate above maximum: {bps}");
+
+        // H.264 should require higher bitrate than HEVC for same resolution
+        let hevc_cfg = EncoderConfig::new(1920, 1080, 60);
+        let hevc_bps = hevc_cfg.resolved_bitrate();
+        assert!(bps > hevc_bps, "H.264 bitrate should exceed HEVC bitrate");
+    }
+
+    #[test]
+    fn test_encoder_config_resolved_bitrate_auto_hevc_4k60() {
         let cfg = EncoderConfig::new(3840, 2160, 60);
         let bps = cfg.resolved_bitrate();
         // 4K should produce a higher bitrate than 1080p
@@ -275,27 +338,57 @@ mod tests {
     #[test]
     fn test_bitrate_auto_clamped_to_minimum_for_tiny_frame() {
         // Tiny 4x4 frame should still hit the 1 Mbps floor
-        let bps = Bitrate::Auto.resolve(4, 4, 30);
+        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 4, 4, 30);
         assert_eq!(bps, 1_000_000);
     }
 
     #[test]
     fn test_bitrate_auto_clamped_to_maximum_for_huge_frame() {
         // Massive resolution should be capped at 100 Mbps
-        let bps = Bitrate::Auto.resolve(15360, 8640, 240);
+        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 15360, 8640, 240);
         assert_eq!(bps, 100_000_000);
     }
 
     #[test]
     fn test_bitrate_mbps_converts_correctly() {
-        assert_eq!(Bitrate::Mbps(20).resolve(1920, 1080, 60), 20_000_000);
+        assert_eq!(
+            Bitrate::Mbps(20).resolve(&Codec::Hevc, 1920, 1080, 60),
+            20_000_000
+        );
     }
 
     #[test]
     fn test_bitrate_mbps_saturates_on_overflow() {
         // Very large Mbps value must not panic
-        let bps = Bitrate::Mbps(u32::MAX).resolve(1920, 1080, 60);
+        let bps = Bitrate::Mbps(u32::MAX).resolve(&Codec::Hevc, 1920, 1080, 60);
         assert!(bps > 0);
+    }
+
+    #[test]
+    fn test_bitrate_auto_h264_higher_than_hevc() {
+        // H.264 should require higher bitrate than HEVC for same resolution
+        let hevc_bps = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60);
+        let h264_bps = Bitrate::Auto.resolve(&Codec::H264, 1920, 1080, 60);
+        assert!(
+            h264_bps > hevc_bps,
+            "H.264 bitrate should exceed HEVC bitrate"
+        );
+    }
+
+    #[test]
+    fn test_bitrate_auto_h264_720p30_calculation() {
+        // Test specific H.264 calculation for 720p30
+        let bps = Bitrate::Auto.resolve(&Codec::H264, 1280, 720, 30);
+        let expected = 1280 * 720 * 30 / 15; // H.264 compression factor is 15
+        assert_eq!(bps, expected);
+    }
+
+    #[test]
+    fn test_bitrate_auto_hevc_720p30_calculation() {
+        // Test specific HEVC calculation for 720p30
+        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 1280, 720, 30);
+        let expected = 1280 * 720 * 30 / 20; // HEVC compression factor is 20
+        assert_eq!(bps, expected);
     }
 
     // ── VideoError ─────────────────────────────────────────────────────────────
@@ -307,9 +400,15 @@ mod tests {
     }
 
     #[test]
-    fn test_video_error_unsupported_codec_message() {
+    fn test_video_error_unsupported_codec_hevc_message() {
         let msg = VideoError::UnsupportedCodec { codec: Codec::Hevc }.to_string();
         assert!(msg.contains("Hevc"));
+    }
+
+    #[test]
+    fn test_video_error_unsupported_codec_h264_message() {
+        let msg = VideoError::UnsupportedCodec { codec: Codec::H264 }.to_string();
+        assert!(msg.contains("H264"));
     }
 
     #[test]
@@ -366,9 +465,49 @@ mod tests {
 
     #[test]
     fn test_auto_bitrate_scales_with_fps() {
-        let bps_60 = Bitrate::Auto.resolve(1920, 1080, 60);
-        let bps_30 = Bitrate::Auto.resolve(1920, 1080, 30);
+        let bps_60 = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60);
+        let bps_30 = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 30);
         assert!(bps_60 > bps_30, "60fps bitrate should exceed 30fps");
+    }
+
+    // ── Codec enum ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_codec_hevc_debug() {
+        let dbg = format!("{:?}", Codec::Hevc);
+        assert!(dbg.contains("Hevc"));
+    }
+
+    #[test]
+    fn test_codec_h264_debug() {
+        let dbg = format!("{:?}", Codec::H264);
+        assert!(dbg.contains("H264"));
+    }
+
+    #[test]
+    fn test_codec_hevc_equality() {
+        assert_eq!(Codec::Hevc, Codec::Hevc);
+        assert_ne!(Codec::Hevc, Codec::H264);
+    }
+
+    #[test]
+    fn test_codec_h264_equality() {
+        assert_eq!(Codec::H264, Codec::H264);
+        assert_ne!(Codec::H264, Codec::Hevc);
+    }
+
+    #[test]
+    fn test_codec_hevc_clone() {
+        let codec = Codec::Hevc;
+        let cloned = codec.clone();
+        assert_eq!(codec, cloned);
+    }
+
+    #[test]
+    fn test_codec_h264_clone() {
+        let codec = Codec::H264;
+        let cloned = codec.clone();
+        assert_eq!(codec, cloned);
     }
 
     // ── EncoderInput ──────────────────────────────────────────────────────────
@@ -569,5 +708,18 @@ mod tests {
         };
         assert_eq!(enc.config().width, 3840);
         assert_eq!(enc.config().height, 2160);
+    }
+
+    #[test]
+    fn test_video_encoder_trait_config_h264() {
+        let config = EncoderConfig::with_codec(1920, 1080, 60, Codec::H264);
+        let enc = NullEncoder {
+            config: config.clone(),
+            return_packet: false,
+        };
+        assert_eq!(enc.config().codec, Codec::H264);
+        assert_eq!(enc.config().width, 1920);
+        assert_eq!(enc.config().height, 1080);
+        assert_eq!(enc.config().fps, 60);
     }
 }
