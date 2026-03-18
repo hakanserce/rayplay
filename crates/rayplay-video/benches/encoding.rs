@@ -163,6 +163,37 @@ fn bench_openh264_encode(c: &mut Criterion) {
     group.finish();
 }
 
+// ── FFmpeg software encode (ffmpeg-fallback feature) ─────────────────────────
+
+#[cfg(feature = "ffmpeg-fallback")]
+fn bench_ffmpeg_encode(c: &mut Criterion) {
+    use rayplay_video::{EncoderInput, FfmpegEncoder, encoder::VideoEncoder};
+
+    let mut group = c.benchmark_group("ffmpeg_encode");
+
+    for (label, w, h, codec) in [
+        ("h264_1080p", 1920u32, 1080u32, Codec::H264),
+        ("h264_720p", 1280, 720, Codec::H264),
+        ("hevc_1080p", 1920, 1080, Codec::Hevc),
+        ("hevc_720p", 1280, 720, Codec::Hevc),
+    ] {
+        let pixels = (w as usize) * (h as usize) * 4;
+        group.throughput(Throughput::Bytes(pixels as u64));
+        group.bench_with_input(
+            BenchmarkId::new("encode", label),
+            &(w, h, codec),
+            |b, (w, h, codec)| {
+                let config = EncoderConfig::with_codec(*w, *h, 30, codec.clone());
+                let mut encoder = FfmpegEncoder::new(config).expect("FfmpegEncoder");
+                let frame = make_raw_frame(*w, *h, 0);
+                b.iter(|| black_box(encoder.encode(EncoderInput::Cpu(&frame))));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_auto_bitrate,
@@ -174,7 +205,14 @@ criterion_group!(
 #[cfg(feature = "fallback")]
 criterion_group!(fallback_benches, bench_openh264_encode,);
 
-#[cfg(feature = "fallback")]
+#[cfg(feature = "ffmpeg-fallback")]
+criterion_group!(ffmpeg_benches, bench_ffmpeg_encode,);
+
+#[cfg(all(feature = "fallback", feature = "ffmpeg-fallback"))]
+criterion_main!(benches, fallback_benches, ffmpeg_benches);
+#[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
 criterion_main!(benches, fallback_benches);
-#[cfg(not(feature = "fallback"))]
+#[cfg(all(not(feature = "fallback"), feature = "ffmpeg-fallback"))]
+criterion_main!(benches, ffmpeg_benches);
+#[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
 criterion_main!(benches);

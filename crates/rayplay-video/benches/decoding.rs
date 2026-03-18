@@ -120,6 +120,48 @@ fn bench_openh264_decode(c: &mut Criterion) {
     group.finish();
 }
 
+// ── FFmpeg software decode (ffmpeg-fallback feature) ─────────────────────────
+
+#[cfg(feature = "ffmpeg-fallback")]
+fn bench_ffmpeg_decode(c: &mut Criterion) {
+    use rayplay_video::decoder::VideoDecoder;
+    use rayplay_video::encoder::{EncoderInput, VideoEncoder};
+    use rayplay_video::{Codec, EncoderConfig, FfmpegDecoder, FfmpegEncoder, RawFrame};
+
+    let mut group = c.benchmark_group("ffmpeg_decode");
+
+    for (label, w, h, codec) in [
+        ("h264_720p", 1280u32, 720u32, Codec::H264),
+        ("h264_480p", 640, 480, Codec::H264),
+        ("hevc_720p", 1280, 720, Codec::Hevc),
+    ] {
+        let config = EncoderConfig::with_codec(w, h, 30, codec.clone());
+        let mut encoder = FfmpegEncoder::new(config).expect("FfmpegEncoder");
+        let size = (w as usize) * (h as usize) * 4;
+        let frame = RawFrame::new(vec![128u8; size], w, h, w * 4, 0);
+
+        // Encode multiple frames to get output
+        let mut packets = Vec::new();
+        for _ in 0..5 {
+            if let Some(pkt) = encoder.encode(EncoderInput::Cpu(&frame)).expect("encode") {
+                packets.push(pkt);
+            }
+        }
+        packets.extend(encoder.flush().expect("flush"));
+
+        if let Some(packet) = packets.into_iter().next() {
+            let pixels = (w as usize) * (h as usize) * 4;
+            group.throughput(Throughput::Bytes(pixels as u64));
+            group.bench_with_input(BenchmarkId::new("decode", label), &packet, |b, packet| {
+                let mut decoder = FfmpegDecoder::new(codec.clone()).expect("FfmpegDecoder");
+                b.iter(|| std::hint::black_box(decoder.decode(packet)));
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_encoded_packet_construction,
@@ -130,7 +172,14 @@ criterion_group!(
 #[cfg(feature = "fallback")]
 criterion_group!(fallback_benches, bench_openh264_decode,);
 
-#[cfg(feature = "fallback")]
+#[cfg(feature = "ffmpeg-fallback")]
+criterion_group!(ffmpeg_benches, bench_ffmpeg_decode,);
+
+#[cfg(all(feature = "fallback", feature = "ffmpeg-fallback"))]
+criterion_main!(benches, fallback_benches, ffmpeg_benches);
+#[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
 criterion_main!(benches, fallback_benches);
-#[cfg(not(feature = "fallback"))]
+#[cfg(all(not(feature = "fallback"), feature = "ffmpeg-fallback"))]
+criterion_main!(benches, ffmpeg_benches);
+#[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
 criterion_main!(benches);

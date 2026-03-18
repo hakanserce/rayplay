@@ -219,7 +219,12 @@ pub fn create_encoder(
 
 #[allow(clippy::needless_pass_by_value)]
 fn create_software_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError> {
-    #[cfg(feature = "fallback")]
+    #[cfg(feature = "ffmpeg-fallback")]
+    {
+        use crate::ffmpeg_enc::FfmpegEncoder;
+        FfmpegEncoder::new(config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+    }
+    #[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
     {
         use crate::openh264_enc::OpenH264Encoder;
         let fallback_config =
@@ -227,7 +232,7 @@ fn create_software_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder
                 .with_bitrate(config.bitrate);
         OpenH264Encoder::new(fallback_config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
     }
-    #[cfg(not(feature = "fallback"))]
+    #[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
     {
         let _ = config;
         Err(VideoError::UnsupportedPlatform)
@@ -479,7 +484,11 @@ mod tests {
         assert!(msg.contains("not supported"));
     }
 
-    #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
+    #[cfg(all(
+        not(target_os = "windows"),
+        feature = "fallback",
+        not(feature = "ffmpeg-fallback")
+    ))]
     #[test]
     fn test_create_encoder_auto_returns_openh264_on_non_windows_with_fallback() {
         let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Auto);
@@ -487,14 +496,18 @@ mod tests {
         assert_eq!(result.unwrap().config().codec, Codec::H264);
     }
 
-    #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
+    #[cfg(all(
+        not(target_os = "windows"),
+        not(feature = "fallback"),
+        not(feature = "ffmpeg-fallback")
+    ))]
     #[test]
     fn test_create_encoder_auto_unsupported_on_non_windows_without_fallback() {
         let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Auto);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
     }
 
-    #[cfg(feature = "fallback")]
+    #[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
     #[test]
     fn test_create_encoder_software_returns_openh264() {
         let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Software);
@@ -502,11 +515,28 @@ mod tests {
         assert_eq!(result.unwrap().config().codec, Codec::H264);
     }
 
-    #[cfg(not(feature = "fallback"))]
+    #[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
     #[test]
     fn test_create_encoder_software_unsupported_without_fallback() {
         let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Software);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+    }
+
+    #[cfg(feature = "ffmpeg-fallback")]
+    #[test]
+    fn test_create_encoder_software_returns_ffmpeg() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Software);
+        assert!(result.is_ok());
+        // FFmpeg preserves the requested codec (HEVC) unlike OpenH264 which forces H264
+        assert_eq!(result.unwrap().config().codec, Codec::Hevc);
+    }
+
+    #[cfg(all(not(target_os = "windows"), feature = "ffmpeg-fallback"))]
+    #[test]
+    fn test_create_encoder_auto_returns_ffmpeg_on_non_windows() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Auto);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().config().codec, Codec::Hevc);
     }
 
     #[test]
