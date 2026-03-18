@@ -60,7 +60,7 @@ pub struct HostConfig {
     /// Video encoder settings derived from the CLI arguments.
     pub encoder_config: EncoderConfig,
     /// Pipeline mode (auto or forced software).
-    #[allow(dead_code)] // read on Windows in stream(), unused on other platforms
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub pipeline_mode: PipelineMode,
 }
 
