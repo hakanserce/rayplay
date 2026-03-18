@@ -5,6 +5,8 @@ model: claude-sonnet-4-20250514
 tools:
   - Read
   - Write
+  - Grep
+  - Glob
   - Bash(cargo fmt *)
   - Bash(cargo test *)
   - Bash(cargo clippy *)

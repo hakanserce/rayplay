@@ -4,10 +4,13 @@ description: "Project manager who tracks deliverables, timelines, velocity, bloc
 model: claude-sonnet-4-20250514
 tools:
   - Read
+  - Grep
+  - Glob
   - Bash(git log *)
   - Bash(git shortlog *)
   - Bash(gh issue *)
   - Bash(gh pr *)
+  - Bash(gh run *)
   - Bash(find *)
   - Bash(wc *)
   - Bash(cat *)

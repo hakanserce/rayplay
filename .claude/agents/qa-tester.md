@@ -4,6 +4,8 @@ description: "QA engineer who validates acceptance criteria, runs integration te
 model: claude-sonnet-4-20250514
 tools:
   - Read
+  - Grep
+  - Glob
   - Bash(cargo test *)
   - Bash(cargo llvm-cov *)
   - Bash(cargo clippy *)
