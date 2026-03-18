@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::pipeline_mode::PipelineMode;
+
 #[derive(Debug, Error)]
 pub enum CaptureError {
     #[error("screen capture is not supported on this platform")]
@@ -115,7 +117,23 @@ pub trait ScreenCapturer: Send {
 ///
 /// Returns [`CaptureError::InitializationFailed`] if the D3D11 device or output
 /// duplication cannot be created.
-pub fn create_capturer(config: CaptureConfig) -> Result<Box<dyn ScreenCapturer>, CaptureError> {
+pub fn create_capturer(
+    config: CaptureConfig,
+    mode: PipelineMode,
+) -> Result<Box<dyn ScreenCapturer>, CaptureError> {
+    if mode == PipelineMode::Software {
+        #[cfg(feature = "fallback")]
+        {
+            use crate::scrap_capture::ScrapCapturer;
+            return ScrapCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>);
+        }
+        #[cfg(not(feature = "fallback"))]
+        {
+            let _ = config;
+            return Err(CaptureError::UnsupportedPlatform);
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         use std::sync::Arc;
@@ -242,14 +260,14 @@ mod tests {
     #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
     #[test]
     fn test_create_capturer_unsupported_on_non_windows() {
-        let result = create_capturer(CaptureConfig::default());
+        let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);
         assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
     }
 
     #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
     #[test]
     fn test_create_capturer_returns_scrap_on_non_windows_with_fallback() {
-        let result = create_capturer(CaptureConfig::default());
+        let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);
         // Success depends on display/permission availability; just verify
         // that we don't get `UnsupportedPlatform`.
         match result {
@@ -263,5 +281,31 @@ mod tests {
             }
             Err(other) => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    // ── Software mode ─────────────────────────────────────────────────────────
+
+    #[cfg(feature = "fallback")]
+    #[test]
+    fn test_create_capturer_software_mode_uses_scrap() {
+        let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);
+        match result {
+            Ok(capturer) => {
+                let (w, h) = capturer.resolution();
+                assert!(w > 0);
+                assert!(h > 0);
+            }
+            Err(CaptureError::InitializationFailed(_)) => {
+                // Expected on headless CI or without screen-recording permission.
+            }
+            Err(other) => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[cfg(not(feature = "fallback"))]
+    #[test]
+    fn test_create_capturer_software_mode_unsupported_without_fallback() {
+        let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);
+        assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
     }
 }

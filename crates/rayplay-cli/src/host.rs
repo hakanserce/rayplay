@@ -5,6 +5,7 @@ use std::{future::Future, net::SocketAddr};
 use anyhow::Result;
 use clap::Parser;
 use rayplay_network::{QuicListener, QuicVideoTransport};
+use rayplay_video::PipelineMode;
 #[cfg(target_os = "windows")]
 use rayplay_video::encoder::GpuTextureHandle;
 use rayplay_video::encoder::{Bitrate, EncoderConfig};
@@ -45,6 +46,10 @@ pub struct HostArgs {
     /// Encoder bitrate in Mbps (0 = auto-compute from resolution and fps).
     #[arg(long, default_value_t = 0)]
     pub bitrate: u32,
+
+    /// Force software pipeline — skip hardware acceleration even on supported platforms.
+    #[arg(long)]
+    pub software: bool,
 }
 
 /// Resolved server configuration derived from [`HostArgs`].
@@ -54,6 +59,9 @@ pub struct HostConfig {
     pub bind_addr: SocketAddr,
     /// Video encoder settings derived from the CLI arguments.
     pub encoder_config: EncoderConfig,
+    /// Pipeline mode (auto or forced software).
+    #[allow(dead_code)] // read on Windows in stream(), unused on other platforms
+    pub pipeline_mode: PipelineMode,
 }
 
 impl HostConfig {
@@ -68,9 +76,15 @@ impl HostConfig {
         };
         let encoder_config =
             EncoderConfig::new(args.width, args.height, args.fps).with_bitrate(bitrate);
+        let pipeline_mode = if args.software {
+            PipelineMode::Software
+        } else {
+            PipelineMode::Auto
+        };
         Self {
             bind_addr,
             encoder_config,
+            pipeline_mode,
         }
     }
 }
@@ -746,6 +760,17 @@ mod tests {
     }
 
     #[test]
+    fn test_host_args_default_software_is_false() {
+        assert!(!default_args().software);
+    }
+
+    #[test]
+    fn test_host_args_software_flag() {
+        let args = HostArgs::parse_from(["rayhost", "--software"]);
+        assert!(args.software);
+    }
+
+    #[test]
     fn test_host_args_explicit_port() {
         let args = HostArgs::parse_from(["rayhost", "--port", "9000"]);
         assert_eq!(args.port, 9000);
@@ -821,6 +846,20 @@ mod tests {
     fn test_host_config_resolved_bitrate_auto_in_range() {
         let bps = default_config().encoder_config.resolved_bitrate();
         assert!((1_000_000..=100_000_000).contains(&bps));
+    }
+
+    #[test]
+    fn test_host_config_pipeline_mode_auto_by_default() {
+        assert_eq!(default_config().pipeline_mode, PipelineMode::Auto);
+    }
+
+    #[test]
+    fn test_host_config_pipeline_mode_software_when_flag_set() {
+        let args = HostArgs::parse_from(["rayhost", "--software"]);
+        assert_eq!(
+            HostConfig::from_args(&args).pipeline_mode,
+            PipelineMode::Software
+        );
     }
 
     #[test]

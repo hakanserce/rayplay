@@ -4,6 +4,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use rayplay_video::PipelineMode;
 
 /// Command-line arguments for the `rayview` binary.
 #[derive(Parser, Debug, Clone)]
@@ -34,6 +35,10 @@ pub struct ClientArgs {
     /// SPAKE2 pairing flow (ADR-007) replaces manual cert distribution.
     #[arg(long)]
     pub cert: Option<PathBuf>,
+
+    /// Force software pipeline — skip hardware acceleration even on supported platforms.
+    #[arg(long)]
+    pub software: bool,
 }
 
 /// Resolved client configuration derived from [`ClientArgs`].
@@ -47,6 +52,8 @@ pub struct ClientConfig {
     pub width: u32,
     /// Window height in logical pixels.
     pub height: u32,
+    /// Pipeline mode for video decoding.
+    pub pipeline_mode: PipelineMode,
 }
 
 /// Returns the default certificate path: `$HOME/.config/rayview/server.der`.
@@ -86,11 +93,17 @@ impl ClientConfig {
     pub fn from_args(args: &ClientArgs) -> Result<Self> {
         let server_addr = resolve_host(&args.host, args.port)?;
         let cert_path = args.cert.clone().unwrap_or_else(default_cert_path);
+        let pipeline_mode = if args.software {
+            PipelineMode::Software
+        } else {
+            PipelineMode::Auto
+        };
         Ok(Self {
             server_addr,
             cert_path,
             width: args.width,
             height: args.height,
+            pipeline_mode,
         })
     }
 
@@ -124,6 +137,7 @@ mod tests {
             width: 1280,
             height: 720,
             cert: None,
+            software: false,
         }
     }
 
@@ -239,6 +253,7 @@ mod tests {
             cert_path: path,
             width: 1280,
             height: 720,
+            pipeline_mode: PipelineMode::Auto,
         };
         assert_eq!(config.load_cert_bytes().unwrap(), b"fakecert");
     }
@@ -250,6 +265,7 @@ mod tests {
             cert_path: "/no/such/file.der".into(),
             width: 1280,
             height: 720,
+            pipeline_mode: PipelineMode::Auto,
         };
         let err = config.load_cert_bytes().unwrap_err();
         assert!(
@@ -257,5 +273,31 @@ mod tests {
                 .contains("failed to read server certificate")
         );
         assert!(err.to_string().contains("/no/such/file.der"));
+    }
+
+    // ── --software flag ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_client_args_default_software_is_false() {
+        assert!(!ClientArgs::parse_from(["rayview", "127.0.0.1"]).software);
+    }
+
+    #[test]
+    fn test_client_args_software_flag() {
+        assert!(ClientArgs::parse_from(["rayview", "127.0.0.1", "--software"]).software);
+    }
+
+    #[test]
+    fn test_from_args_pipeline_mode_auto_by_default() {
+        let config = ClientConfig::from_args(&dummy_args("127.0.0.1")).unwrap();
+        assert_eq!(config.pipeline_mode, PipelineMode::Auto);
+    }
+
+    #[test]
+    fn test_from_args_pipeline_mode_software_when_flag_set() {
+        let mut args = dummy_args("127.0.0.1");
+        args.software = true;
+        let config = ClientConfig::from_args(&args).unwrap();
+        assert_eq!(config.pipeline_mode, PipelineMode::Software);
     }
 }

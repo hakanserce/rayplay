@@ -26,6 +26,7 @@ pub mod encoder;
 pub mod frame;
 pub mod nvenc;
 pub mod packet;
+pub mod pipeline_mode;
 pub mod render_window;
 pub mod renderer;
 pub mod videotoolbox;
@@ -33,11 +34,11 @@ pub mod wgpu_renderer;
 mod wgpu_surface;
 
 #[cfg(feature = "fallback")]
-pub(crate) mod scrap_capture;
-#[cfg(feature = "fallback")]
 pub mod openh264_dec;
 #[cfg(feature = "fallback")]
 pub mod openh264_enc;
+#[cfg(feature = "fallback")]
+pub(crate) mod scrap_capture;
 
 #[cfg(target_os = "windows")]
 pub mod d3d11_device;
@@ -58,6 +59,7 @@ pub use encoder::{
 };
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;
+pub use pipeline_mode::PipelineMode;
 pub use render_window::RenderWindow;
 pub use renderer::{RenderError, Renderer};
 pub use wgpu_renderer::WgpuRenderer;
