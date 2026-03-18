@@ -2,7 +2,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::{frame::RawFrame, packet::EncodedPacket};
+use crate::{frame::RawFrame, packet::EncodedPacket, pipeline_mode::PipelineMode};
 
 /// Opaque handle to a GPU-resident texture for zero-copy encoding.
 ///
@@ -198,7 +198,14 @@ pub enum VideoError {
 // On Windows the config is consumed by NvencEncoder::new; the non-Windows branch
 // must accept the same signature.
 #[allow(clippy::needless_pass_by_value)]
-pub fn create_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError> {
+pub fn create_encoder(
+    config: EncoderConfig,
+    mode: PipelineMode,
+) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    if mode == PipelineMode::Software {
+        return create_software_encoder(config);
+    }
+
     #[cfg(target_os = "windows")]
     {
         use crate::nvenc::NvencEncoder;
@@ -206,19 +213,24 @@ pub fn create_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, Vi
     }
     #[cfg(not(target_os = "windows"))]
     {
-        #[cfg(feature = "fallback")]
-        {
-            use crate::openh264_enc::OpenH264Encoder;
-            let fallback_config =
-                EncoderConfig::with_codec(config.width, config.height, config.fps, Codec::H264)
-                    .with_bitrate(config.bitrate);
-            OpenH264Encoder::new(fallback_config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
-        }
-        #[cfg(not(feature = "fallback"))]
-        {
-            let _ = config;
-            Err(VideoError::UnsupportedPlatform)
-        }
+        create_software_encoder(config)
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn create_software_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    #[cfg(feature = "fallback")]
+    {
+        use crate::openh264_enc::OpenH264Encoder;
+        let fallback_config =
+            EncoderConfig::with_codec(config.width, config.height, config.fps, Codec::H264)
+                .with_bitrate(config.bitrate);
+        OpenH264Encoder::new(fallback_config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+    }
+    #[cfg(not(feature = "fallback"))]
+    {
+        let _ = config;
+        Err(VideoError::UnsupportedPlatform)
     }
 }
 
@@ -469,17 +481,31 @@ mod tests {
 
     #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
     #[test]
-    fn test_create_encoder_returns_openh264_on_non_windows_with_fallback() {
-        let result = create_encoder(EncoderConfig::new(1920, 1080, 60));
+    fn test_create_encoder_auto_returns_openh264_on_non_windows_with_fallback() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Auto);
         assert!(result.is_ok());
-        // create_encoder forces H264 for the fallback path
         assert_eq!(result.unwrap().config().codec, Codec::H264);
     }
 
     #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
     #[test]
-    fn test_create_encoder_unsupported_on_non_windows_without_fallback() {
-        let result = create_encoder(EncoderConfig::new(1920, 1080, 60));
+    fn test_create_encoder_auto_unsupported_on_non_windows_without_fallback() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Auto);
+        assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+    }
+
+    #[cfg(feature = "fallback")]
+    #[test]
+    fn test_create_encoder_software_returns_openh264() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Software);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().config().codec, Codec::H264);
+    }
+
+    #[cfg(not(feature = "fallback"))]
+    #[test]
+    fn test_create_encoder_software_unsupported_without_fallback() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60), PipelineMode::Software);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
     }
 

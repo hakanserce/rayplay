@@ -117,12 +117,13 @@ pub async fn connect(
 
     let cert_bytes = config.load_cert_bytes()?;
     let server_addr = config.server_addr;
+    let pipeline_mode = config.pipeline_mode;
 
     connect_with_reconnect(server_addr, cert_bytes, token, |transport, child| {
         let frame_tx = frame_tx.clone();
         async move {
             // Default to HEVC for now; could be made configurable in the future
-            let decoder = create_decoder(Codec::Hevc)
+            let decoder = create_decoder(Codec::Hevc, pipeline_mode)
                 .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
             super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
         }
@@ -263,6 +264,7 @@ mod tests {
             cert_path: "/nonexistent/cert.der".into(),
             width: 1280,
             height: 720,
+            pipeline_mode: rayplay_video::PipelineMode::Auto,
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();
@@ -284,6 +286,7 @@ mod tests {
             cert_path,
             width: 1280,
             height: 720,
+            pipeline_mode: rayplay_video::PipelineMode::Auto,
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();
@@ -305,6 +308,7 @@ mod tests {
             cert_path,
             width: 1280,
             height: 720,
+            pipeline_mode: rayplay_video::PipelineMode::Auto,
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();

@@ -2,6 +2,7 @@ use crate::{
     decoded_frame::DecodedFrame,
     encoder::{Codec, VideoError},
     packet::EncodedPacket,
+    pipeline_mode::PipelineMode,
 };
 
 /// Returns the platform-appropriate hardware decoder.
@@ -13,7 +14,14 @@ use crate::{
 ///
 /// Returns [`VideoError::UnsupportedPlatform`] on non-macOS, or
 /// [`VideoError::DecodingFailed`] if the `VideoToolbox` session cannot be created.
-pub fn create_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError> {
+pub fn create_decoder(
+    codec: Codec,
+    mode: PipelineMode,
+) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    if mode == PipelineMode::Software {
+        return create_software_decoder(codec);
+    }
+
     #[cfg(target_os = "macos")]
     {
         use crate::videotoolbox::VtDecoder;
@@ -21,16 +29,20 @@ pub fn create_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError>
     }
     #[cfg(not(target_os = "macos"))]
     {
-        #[cfg(feature = "fallback")]
-        {
-            use crate::openh264_dec::OpenH264Decoder;
-            OpenH264Decoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
-        }
-        #[cfg(not(feature = "fallback"))]
-        {
-            let _ = codec;
-            Err(VideoError::UnsupportedPlatform)
-        }
+        create_software_decoder(codec)
+    }
+}
+
+fn create_software_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    #[cfg(feature = "fallback")]
+    {
+        use crate::openh264_dec::OpenH264Decoder;
+        OpenH264Decoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+    }
+    #[cfg(not(feature = "fallback"))]
+    {
+        let _ = codec;
+        Err(VideoError::UnsupportedPlatform)
     }
 }
 
@@ -112,39 +124,59 @@ mod tests {
 
     #[cfg(all(not(target_os = "macos"), feature = "fallback"))]
     #[test]
-    fn test_create_decoder_returns_openh264_on_non_macos_with_fallback() {
-        // H264 should succeed via OpenH264Decoder
-        let result = create_decoder(Codec::H264);
+    fn test_create_decoder_auto_returns_openh264_on_non_macos_with_fallback() {
+        let result = create_decoder(Codec::H264, PipelineMode::Auto);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().codec(), Codec::H264);
 
-        // HEVC is not supported by OpenH264 — should fail with UnsupportedCodec
-        let result = create_decoder(Codec::Hevc);
+        let result = create_decoder(Codec::Hevc, PipelineMode::Auto);
         assert!(matches!(result, Err(VideoError::UnsupportedCodec { .. })));
     }
 
     #[cfg(all(not(target_os = "macos"), not(feature = "fallback")))]
     #[test]
-    fn test_create_decoder_unsupported_on_non_macos_without_fallback() {
-        let result = create_decoder(Codec::Hevc);
+    fn test_create_decoder_auto_unsupported_on_non_macos_without_fallback() {
+        let result = create_decoder(Codec::Hevc, PipelineMode::Auto);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
 
-        let result = create_decoder(Codec::H264);
+        let result = create_decoder(Codec::H264, PipelineMode::Auto);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn test_create_decoder_returns_vt_decoder_on_macos() {
-        let result = create_decoder(Codec::Hevc);
+    fn test_create_decoder_auto_returns_vt_decoder_on_macos() {
+        let result = create_decoder(Codec::Hevc, PipelineMode::Auto);
         assert!(result.is_ok());
-        let decoder = result.unwrap();
-        assert_eq!(decoder.codec(), Codec::Hevc);
+        assert_eq!(result.unwrap().codec(), Codec::Hevc);
 
-        let result = create_decoder(Codec::H264);
+        let result = create_decoder(Codec::H264, PipelineMode::Auto);
         assert!(result.is_ok());
-        let decoder = result.unwrap();
-        assert_eq!(decoder.codec(), Codec::H264);
+        assert_eq!(result.unwrap().codec(), Codec::H264);
+    }
+
+    // ── Software mode ─────────────────────────────────────────────────────────
+
+    #[cfg(feature = "fallback")]
+    #[test]
+    fn test_create_decoder_software_returns_openh264() {
+        let result = create_decoder(Codec::H264, PipelineMode::Software);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::H264);
+    }
+
+    #[cfg(feature = "fallback")]
+    #[test]
+    fn test_create_decoder_software_rejects_hevc() {
+        let result = create_decoder(Codec::Hevc, PipelineMode::Software);
+        assert!(matches!(result, Err(VideoError::UnsupportedCodec { .. })));
+    }
+
+    #[cfg(not(feature = "fallback"))]
+    #[test]
+    fn test_create_decoder_software_unsupported_without_fallback() {
+        let result = create_decoder(Codec::H264, PipelineMode::Software);
+        assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
     }
 
     // ── VideoDecoder trait contract ────────────────────────────────────────────
