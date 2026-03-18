@@ -62,7 +62,8 @@ script = [
 description = "Coverage check — fails if below 99% (used in CI)"
 command = "cargo"
 # Excluded files (platform/hardware glue — untestable on headless CI):
-#   main.rs            — binary entry points with no testable logic.
+#   main.rs            — binary entry points with no testable logic
+#     (also matches client_main.rs).
 #   render_window.rs   — winit event-loop glue; ActiveEventLoop and Window
 #     cannot be constructed outside the event loop.
 #   wgpu_surface.rs    — requires a live wgpu::Surface backed by a real OS
