@@ -3,7 +3,7 @@
 //! Provides a cross-platform fallback when hardware decoders (`VideoToolbox`)
 //! are unavailable. Gated behind the `fallback` Cargo feature.
 
-use openh264::decoder::Decoder;
+use openh264::decoder::{Decoder, DecoderConfig};
 use openh264::formats::YUVSource;
 
 use crate::decoded_frame::{DecodedFrame, PixelFormat};
@@ -40,17 +40,31 @@ impl OpenH264Decoder {
             });
         }
 
-        let decoder = Decoder::new().map_err(|e| VideoError::DecodingFailed {
-            reason: format!("OpenH264 decoder init failed: {e}"),
+        let api = openh264::OpenH264API::from_source();
+        let decoder = Decoder::with_api_config(api, DecoderConfig::new()).map_err(|e| {
+            VideoError::DecodingFailed {
+                reason: format!("OpenH264 decoder init failed: {e}"),
+            }
         })?;
 
         Ok(Self { decoder, codec })
     }
 }
 
-/// Converts a `DecodedYUV` (via `YUVSource` trait) to BGRA8 using BT.601 coefficients.
+/// Converts a `DecodedYUV` (via `YUVSource` trait) to BGRA8 using fixed-point
+/// BT.601 inverse coefficients.
+///
+/// Fixed-point with a 16-bit shift avoids per-pixel floating-point work.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn yuv_to_bgra(yuv: &impl YUVSource) -> Vec<u8> {
+    // Fixed-point BT.601 inverse coefficients (×65 536)
+    const FP_SHIFT: i32 = 16;
+    const FP_HALF: i32 = 1 << 15;
+    const R_V: i32 = 91_881; //  1.402 × 65536
+    const G_U: i32 = -22_544; // -0.344 × 65536
+    const G_V: i32 = -46_793; // -0.714 × 65536
+    const B_U: i32 = 116_130; //  1.772 × 65536
+
     let (width, height) = yuv.dimensions();
     let (y_stride, u_stride, v_stride) = yuv.strides();
     let y_data = yuv.y();
@@ -61,18 +75,18 @@ fn yuv_to_bgra(yuv: &impl YUVSource) -> Vec<u8> {
 
     for row in 0..height {
         for col in 0..width {
-            let y_val = f32::from(y_data[row * y_stride + col]);
-            let u_val = f32::from(u_data[(row / 2) * u_stride + col / 2]);
-            let v_val = f32::from(v_data[(row / 2) * v_stride + col / 2]);
+            let y_val = i32::from(y_data[row * y_stride + col]) << FP_SHIFT;
+            let u_val = i32::from(u_data[(row / 2) * u_stride + col / 2]) - 128;
+            let v_val = i32::from(v_data[(row / 2) * v_stride + col / 2]) - 128;
 
-            let r = 1.402_f32.mul_add(v_val - 128.0, y_val);
-            let g = (-0.714_f32).mul_add(v_val - 128.0, (-0.344_f32).mul_add(u_val - 128.0, y_val));
-            let b = 1.772_f32.mul_add(u_val - 128.0, y_val);
+            let r = (y_val + R_V * v_val + FP_HALF) >> FP_SHIFT;
+            let g = (y_val + G_U * u_val + G_V * v_val + FP_HALF) >> FP_SHIFT;
+            let b = (y_val + B_U * u_val + FP_HALF) >> FP_SHIFT;
 
             let out = (row * width + col) * 4;
-            bgra[out] = b.round().clamp(0.0, 255.0) as u8;
-            bgra[out + 1] = g.round().clamp(0.0, 255.0) as u8;
-            bgra[out + 2] = r.round().clamp(0.0, 255.0) as u8;
+            bgra[out] = b.clamp(0, 255) as u8;
+            bgra[out + 1] = g.clamp(0, 255) as u8;
+            bgra[out + 2] = r.clamp(0, 255) as u8;
             bgra[out + 3] = 255;
         }
     }

@@ -38,6 +38,14 @@ impl OpenH264Encoder {
             });
         }
 
+        // OpenH264 requires even dimensions for 4:2:0 chroma subsampling.
+        if !config.width.is_multiple_of(2) || !config.height.is_multiple_of(2) {
+            return Err(VideoError::InvalidDimensions {
+                width: config.width,
+                height: config.height,
+            });
+        }
+
         let api_config = openh264::encoder::EncoderConfig::new()
             .set_bitrate_bps(config.resolved_bitrate())
             .max_frame_rate(f32::from(u16::try_from(config.fps).unwrap_or(u16::MAX)));
@@ -52,65 +60,79 @@ impl OpenH264Encoder {
     }
 }
 
-/// Converts BGRA pixels to a `YUVBuffer` (BT.601 full-range).
+/// Converts BGRA pixels to a `YUVBuffer` (BT.601 full-range) in a single pass
+/// using fixed-point integer arithmetic.
 ///
-/// Subsamples U/V by averaging 2x2 blocks for 4:2:0 chroma format.
-#[allow(clippy::many_single_char_names)]
+/// Processes pixels in 2x2 blocks: computes Y for each pixel and accumulates
+/// U/V sums for chroma subsampling, avoiding a second pass over the data.
+///
+/// Fixed-point coefficients use a 16-bit shift (multiply by 65 536) so all
+/// arithmetic stays in `i32`, which is substantially faster than `f32` on most
+/// CPUs and avoids rounding-mode surprises.
+#[allow(clippy::many_single_char_names, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn bgra_to_yuv(data: &[u8], width: u32, height: u32, stride: u32) -> YUVBuffer {
+    // Fixed-point BT.601 coefficients (×65 536)
+    const FP_SHIFT: i32 = 16;
+    const FP_HALF: i32 = 1 << 15; // 0.5 in fixed-point for rounding
+
+    // Y coefficients
+    const Y_R: i32 = 19_595; // 0.299 × 65536
+    const Y_G: i32 = 38_470; // 0.587 × 65536
+    const Y_B: i32 = 7_471; // 0.114 × 65536
+
+    // U coefficients
+    const U_R: i32 = -11_076; // -0.169 × 65536
+    const U_G: i32 = -21_692; // -0.331 × 65536
+    const U_B: i32 = 32_768; //  0.500 × 65536
+
+    // V coefficients
+    const V_R: i32 = 32_768; //  0.500 × 65536
+    const V_G: i32 = -27_460; // -0.419 × 65536
+    const V_B: i32 = -5_308; // -0.081 × 65536
+
     let img_w = width as usize;
     let img_h = height as usize;
     let row_stride = stride as usize;
     let uv_w = img_w / 2;
     let uv_h = img_h / 2;
 
-    // YUVBuffer stores Y+U+V contiguously
     let yuv_size = img_w * img_h + 2 * uv_w * uv_h;
     let mut yuv = vec![0u8; yuv_size];
 
     let (y_plane, uv_planes) = yuv.split_at_mut(img_w * img_h);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_w * uv_h);
 
-    for row in 0..img_h {
-        let row_offset = row * row_stride;
-        for col in 0..img_w {
-            let px = row_offset + col * 4;
-            let b = f32::from(data[px]);
-            let g = f32::from(data[px + 1]);
-            let r = f32::from(data[px + 2]);
-
-            let luma = 0.299_f32.mul_add(r, 0.587_f32.mul_add(g, 0.114 * b));
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            {
-                y_plane[row * img_w + col] = luma.round().clamp(0.0, 255.0) as u8;
-            }
-        }
-    }
-
-    // Subsample U/V by averaging 2x2 blocks
-    for row in 0..uv_h {
-        for col in 0..uv_w {
-            let mut sum_u = 0.0_f32;
-            let mut sum_v = 0.0_f32;
+    // Single pass: iterate 2×2 blocks, compute Y per pixel and accumulate U/V.
+    for block_row in 0..uv_h {
+        for block_col in 0..uv_w {
+            let mut sum_u: i32 = 0;
+            let mut sum_v: i32 = 0;
 
             for dy in 0..2 {
+                let py = block_row * 2 + dy;
+                let row_offset = py * row_stride;
                 for dx in 0..2 {
-                    let py = row * 2 + dy;
-                    let px_col = col * 2 + dx;
-                    let px = py * row_stride + px_col * 4;
-                    let b = f32::from(data[px]);
-                    let g = f32::from(data[px + 1]);
-                    let r = f32::from(data[px + 2]);
+                    let px_col = block_col * 2 + dx;
+                    let px = row_offset + px_col * 4;
+                    let b = i32::from(data[px]);
+                    let g = i32::from(data[px + 1]);
+                    let r = i32::from(data[px + 2]);
 
-                    sum_u += (-0.169_f32).mul_add(r, (-0.331_f32).mul_add(g, 0.500 * b + 128.0));
-                    sum_v += 0.500_f32.mul_add(r, (-0.419_f32).mul_add(g, (-0.081 * b) + 128.0));
+                    // Y (clamp to 0..255)
+                    let y_val = (Y_R * r + Y_G * g + Y_B * b + FP_HALF) >> FP_SHIFT;
+                    y_plane[py * img_w + px_col] = y_val.clamp(0, 255) as u8;
+
+                    // Accumulate U/V for the 2×2 block
+                    sum_u += U_R * r + U_G * g + U_B * b;
+                    sum_v += V_R * r + V_G * g + V_B * b;
                 }
             }
 
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            {
-                u_plane[row * uv_w + col] = (sum_u / 4.0).round().clamp(0.0, 255.0) as u8;
-                v_plane[row * uv_w + col] = (sum_v / 4.0).round().clamp(0.0, 255.0) as u8;
-            }
+            // Average over 4 pixels, add 128 offset, round and clamp.
+            let u_val = ((sum_u + 2) / 4 + (128 << FP_SHIFT) + FP_HALF) >> FP_SHIFT;
+            let v_val = ((sum_v + 2) / 4 + (128 << FP_SHIFT) + FP_HALF) >> FP_SHIFT;
+            u_plane[block_row * uv_w + block_col] = u_val.clamp(0, 255) as u8;
+            v_plane[block_row * uv_w + block_col] = v_val.clamp(0, 255) as u8;
         }
     }
 
@@ -303,5 +325,31 @@ mod tests {
         let packet = enc.encode(EncoderInput::Cpu(&frame)).unwrap().unwrap();
         assert_eq!(packet.duration_us, 0);
         assert_eq!(packet.timestamp_us, 500);
+    }
+
+    #[test]
+    fn test_openh264_encoder_rejects_odd_width() {
+        let config = EncoderConfig::with_codec(63, 64, 30, Codec::H264);
+        let err = OpenH264Encoder::new(config).unwrap_err();
+        assert!(matches!(
+            err,
+            VideoError::InvalidDimensions {
+                width: 63,
+                height: 64
+            }
+        ));
+    }
+
+    #[test]
+    fn test_openh264_encoder_rejects_odd_height() {
+        let config = EncoderConfig::with_codec(64, 63, 30, Codec::H264);
+        let err = OpenH264Encoder::new(config).unwrap_err();
+        assert!(matches!(
+            err,
+            VideoError::InvalidDimensions {
+                width: 64,
+                height: 63
+            }
+        ));
     }
 }

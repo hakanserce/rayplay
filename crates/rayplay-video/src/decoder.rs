@@ -110,9 +110,22 @@ mod tests {
 
     // ── create_decoder factory ─────────────────────────────────────────────────
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), feature = "fallback"))]
     #[test]
-    fn test_create_decoder_unsupported_on_non_macos() {
+    fn test_create_decoder_returns_openh264_on_non_macos_with_fallback() {
+        // H264 should succeed via OpenH264Decoder
+        let result = create_decoder(Codec::H264);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::H264);
+
+        // HEVC is not supported by OpenH264 — should fail with UnsupportedCodec
+        let result = create_decoder(Codec::Hevc);
+        assert!(matches!(result, Err(VideoError::UnsupportedCodec { .. })));
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(feature = "fallback")))]
+    #[test]
+    fn test_create_decoder_unsupported_on_non_macos_without_fallback() {
         let result = create_decoder(Codec::Hevc);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
 
