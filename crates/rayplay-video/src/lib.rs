@@ -19,7 +19,7 @@
 //! ```
 
 pub mod capture;
-pub mod capture_factory;
+mod capture_factory;
 pub mod chunker;
 pub mod decoded_frame;
 pub mod decoder;

@@ -105,6 +105,36 @@ before committing.
 - Test edge cases: empty inputs, maximum sizes, concurrent access, error paths
 - Each test should test ONE thing
 
+## Coverage Exclusion Policy
+
+Platform/hardware-dependent code is excluded from coverage reporting via
+`--ignore-filename-regex` in `Makefile.toml`. Testable business logic must
+never be excluded.
+
+### When to split a file
+If a file has ANY lines that call OS/hardware APIs and cannot be tested on
+headless CI, extract those into a separate file and add it to the exclusion
+regex. The platform file should be as thin as possible.
+
+### What to exclude
+- Binary entry points (`main.rs`)
+- OS API / FFI wrappers (display capture, window creation, GPU surface)
+- Platform-dispatch factories with `#[cfg]` blocks
+- TLS/crypto initialization with virtually-unreproducible error paths
+- Test doubles (`test_helper.rs`)
+- Feature-gated files not compiled in the default CI pipeline
+
+### What to never exclude
+- Pure functions, data types, trait definitions
+- Algorithms, configuration validation, serialization logic
+- Any code that CAN be unit-tested on headless CI
+
+### On stable Rust
+Do NOT use `// coverage:excl-line` or `// llvm-cov:excl-start/stop` comments —
+they are undocumented and unreliable with `cargo-llvm-cov`. If nightly is
+adopted later, `#[cfg_attr(coverage_nightly, coverage(off))]` can be used for
+function/module-level exclusion.
+
 ## Git & PR Process
 
 ### Branching
