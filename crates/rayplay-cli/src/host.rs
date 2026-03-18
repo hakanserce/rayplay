@@ -151,7 +151,7 @@ pub async fn serve(
 /// - or a send on `packet_tx` fails because the receiver was already dropped.
 #[cfg(any(target_os = "windows", test))]
 pub(crate) fn drive_encode_loop(
-    capturer: Box<dyn ScreenCapturer>,
+    mut capturer: Box<dyn ScreenCapturer>,
     mut encoder: Box<dyn VideoEncoder>,
     packet_tx: tokio::sync::mpsc::Sender<anyhow::Result<EncodedPacket>>,
     session_start: std::time::Instant,
@@ -472,7 +472,7 @@ mod tests {
     }
 
     impl ScreenCapturer for StubCapturer {
-        fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+        fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
             if self.frames_remaining.load(Ordering::SeqCst) == 0 {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 return Err(CaptureError::Timeout(std::time::Duration::from_millis(5)));
@@ -539,7 +539,7 @@ mod tests {
     struct FailingCapturer;
 
     impl ScreenCapturer for FailingCapturer {
-        fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+        fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
             Err(CaptureError::AcquireFailed("stub failure".to_owned()))
         }
 
@@ -588,7 +588,7 @@ mod tests {
     }
 
     impl ScreenCapturer for TimeoutThenFailCapturer {
-        fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+        fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
             if self.timeouts_remaining.load(Ordering::SeqCst) > 0 {
                 self.timeouts_remaining.fetch_sub(1, Ordering::SeqCst);
                 return Err(CaptureError::Timeout(std::time::Duration::ZERO));

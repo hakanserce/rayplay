@@ -88,7 +88,7 @@ mod inner {
 
     impl ScreenCapturer for DxgiCapture {
         #[instrument(skip(self))]
-        fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+        fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
             let timestamp = Instant::now();
 
             let desktop_texture = acquire_frame(&self.duplication, self.timeout_ms)?;

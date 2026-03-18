@@ -101,7 +101,7 @@ pub trait ScreenCapturer: Send {
     /// Returns [`CaptureError::AcquireFailed`] if the desktop duplication API
     /// fails to acquire a frame, or [`CaptureError::Timeout`] if no new frame
     /// is available within the configured timeout.
-    fn capture_frame(&self) -> Result<CapturedFrame, CaptureError>;
+    fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError>;
     fn resolution(&self) -> (u32, u32);
 }
 

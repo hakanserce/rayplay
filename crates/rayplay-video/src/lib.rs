@@ -33,7 +33,7 @@ pub mod wgpu_renderer;
 mod wgpu_surface;
 
 #[cfg(feature = "fallback")]
-pub mod scrap_capture;
+pub(crate) mod scrap_capture;
 
 #[cfg(target_os = "windows")]
 pub mod d3d11_device;
