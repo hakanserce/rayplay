@@ -19,6 +19,7 @@ use crate::packet::EncodedPacket;
 pub struct FfmpegDecoder {
     decoder: VideoDec,
     scaler: Option<scaling::Context>,
+    scaler_params: Option<(u32, u32, Pixel)>,
     codec: Codec,
 }
 
@@ -67,6 +68,7 @@ impl FfmpegDecoder {
         Ok(Self {
             decoder,
             scaler: None,
+            scaler_params: None,
             codec,
         })
     }
@@ -77,6 +79,10 @@ impl FfmpegDecoder {
         height: u32,
         src_format: Pixel,
     ) -> Result<&mut scaling::Context, VideoError> {
+        let current_params = (width, height, src_format);
+        if self.scaler_params.as_ref() != Some(&current_params) {
+            self.scaler = None;
+        }
         if self.scaler.is_none() {
             let scaler = scaling::Context::get(
                 src_format,
@@ -91,15 +97,49 @@ impl FfmpegDecoder {
                 reason: format!("FFmpeg scaler creation failed: {e}"),
             })?;
             self.scaler = Some(scaler);
+            self.scaler_params = Some(current_params);
         }
         Ok(self.scaler.as_mut().expect("scaler just set"))
     }
+
+    fn yuv_to_decoded_frame(
+        &mut self,
+        decoded: &frame::Video,
+        timestamp_us: u64,
+    ) -> Result<DecodedFrame, VideoError> {
+        let width = decoded.width();
+        let height = decoded.height();
+        let src_format = decoded.format();
+
+        let scaler = self.ensure_scaler(width, height, src_format)?;
+
+        let mut bgra_frame = frame::Video::new(Pixel::BGRA, width, height);
+        scaler
+            .run(decoded, &mut bgra_frame)
+            .map_err(|e| VideoError::DecodingFailed {
+                reason: format!("FFmpeg YUV→BGRA scaling failed: {e}"),
+            })?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let stride = bgra_frame.stride(0) as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let data_len = (stride * height) as usize;
+        let bgra_data = bgra_frame.data(0)[..data_len].to_vec();
+
+        Ok(DecodedFrame::new_cpu(
+            bgra_data,
+            width,
+            height,
+            stride,
+            PixelFormat::Bgra8,
+            timestamp_us,
+        ))
+    }
 }
 
-#[allow(clippy::cast_possible_truncation)]
 impl VideoDecoder for FfmpegDecoder {
     fn decode(&mut self, packet: &EncodedPacket) -> Result<Option<DecodedFrame>, VideoError> {
-        let mut pkt = ffmpeg_next::Packet::copy(&packet.data);
+        let pkt = ffmpeg_next::Packet::copy(&packet.data);
         self.decoder
             .send_packet(&pkt)
             .map_err(|e| VideoError::DecodingFailed {
@@ -119,31 +159,8 @@ impl VideoDecoder for FfmpegDecoder {
             }
         }
 
-        let width = decoded.width();
-        let height = decoded.height();
-        let src_format = decoded.format();
-
-        let scaler = self.ensure_scaler(width, height, src_format)?;
-
-        let mut bgra_frame = frame::Video::new(Pixel::BGRA, width, height);
-        scaler
-            .run(&decoded, &mut bgra_frame)
-            .map_err(|e| VideoError::DecodingFailed {
-                reason: format!("FFmpeg YUV→BGRA scaling failed: {e}"),
-            })?;
-
-        let stride = bgra_frame.stride(0) as u32;
-        let data_len = (stride * height) as usize;
-        let bgra_data = bgra_frame.data(0)[..data_len].to_vec();
-
-        Ok(Some(DecodedFrame::new_cpu(
-            bgra_data,
-            width,
-            height,
-            stride,
-            PixelFormat::Bgra8,
-            packet.timestamp_us,
-        )))
+        self.yuv_to_decoded_frame(&decoded, packet.timestamp_us)
+            .map(Some)
     }
 
     fn flush(&mut self) -> Result<Vec<DecodedFrame>, VideoError> {
@@ -158,30 +175,7 @@ impl VideoDecoder for FfmpegDecoder {
             let mut decoded = frame::Video::empty();
             match self.decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
-                    let width = decoded.width();
-                    let height = decoded.height();
-                    let src_format = decoded.format();
-
-                    let scaler = self.ensure_scaler(width, height, src_format)?;
-                    let mut bgra_frame = frame::Video::new(Pixel::BGRA, width, height);
-                    scaler.run(&decoded, &mut bgra_frame).map_err(|e| {
-                        VideoError::DecodingFailed {
-                            reason: format!("FFmpeg flush scaling failed: {e}"),
-                        }
-                    })?;
-
-                    let stride = bgra_frame.stride(0) as u32;
-                    let data_len = (stride * height) as usize;
-                    let bgra_data = bgra_frame.data(0)[..data_len].to_vec();
-
-                    frames.push(DecodedFrame::new_cpu(
-                        bgra_data,
-                        width,
-                        height,
-                        stride,
-                        PixelFormat::Bgra8,
-                        0,
-                    ));
+                    frames.push(self.yuv_to_decoded_frame(&decoded, 0)?);
                 }
                 Err(_) => break,
             }

@@ -107,6 +107,14 @@ impl FfmpegEncoder {
             frame_index: 0,
         })
     }
+
+    fn duration_us(&self) -> u64 {
+        if self.config.fps > 0 {
+            1_000_000 / u64::from(self.config.fps)
+        } else {
+            0
+        }
+    }
 }
 
 impl VideoEncoder for FfmpegEncoder {
@@ -161,19 +169,12 @@ impl VideoEncoder for FfmpegEncoder {
         // Try to receive encoded packet
         let mut pkt = ffmpeg_next::Packet::empty();
         match self.encoder.receive_packet(&mut pkt) {
-            Ok(()) => {
-                let duration_us = if self.config.fps > 0 {
-                    1_000_000 / u64::from(self.config.fps)
-                } else {
-                    0
-                };
-                Ok(Some(EncodedPacket::new(
-                    pkt.data().unwrap_or(&[]).to_vec(),
-                    pkt.is_key(),
-                    raw.timestamp_us,
-                    duration_us,
-                )))
-            }
+            Ok(()) => Ok(Some(EncodedPacket::new(
+                pkt.data().unwrap_or(&[]).to_vec(),
+                pkt.is_key(),
+                raw.timestamp_us,
+                self.duration_us(),
+            ))),
             Err(ffmpeg_next::Error::Other {
                 errno: libc::EAGAIN,
             }) => Ok(None),
@@ -191,11 +192,7 @@ impl VideoEncoder for FfmpegEncoder {
             })?;
 
         let mut packets = Vec::new();
-        let duration_us = if self.config.fps > 0 {
-            1_000_000 / u64::from(self.config.fps)
-        } else {
-            0
-        };
+        let duration_us = self.duration_us();
 
         loop {
             let mut pkt = ffmpeg_next::Packet::empty();
@@ -205,7 +202,7 @@ impl VideoEncoder for FfmpegEncoder {
                     packets.push(EncodedPacket::new(
                         pkt.data().unwrap_or(&[]).to_vec(),
                         pkt.is_key(),
-                        ts as u64,
+                        u64::try_from(ts).unwrap_or(0),
                         duration_us,
                     ));
                 }
@@ -355,6 +352,20 @@ mod tests {
             if let Ok(Some(packet)) = enc.encode(EncoderInput::Cpu(&frame)) {
                 assert_eq!(packet.duration_us, 0);
             }
+        }
+    }
+
+    #[test]
+    fn test_ffmpeg_encoder_duration_us() {
+        let enc = FfmpegEncoder::new(make_config(64, 64, 30, Codec::H264)).unwrap();
+        assert_eq!(enc.duration_us(), 1_000_000 / 30);
+    }
+
+    #[test]
+    fn test_ffmpeg_encoder_duration_us_zero_fps() {
+        let config = EncoderConfig::with_codec(64, 64, 0, Codec::H264);
+        if let Ok(enc) = FfmpegEncoder::new(config) {
+            assert_eq!(enc.duration_us(), 0);
         }
     }
 }
