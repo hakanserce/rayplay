@@ -101,7 +101,7 @@ pub trait ScreenCapturer: Send {
     /// Returns [`CaptureError::AcquireFailed`] if the desktop duplication API
     /// fails to acquire a frame, or [`CaptureError::Timeout`] if no new frame
     /// is available within the configured timeout.
-    fn capture_frame(&self) -> Result<CapturedFrame, CaptureError>;
+    fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError>;
     fn resolution(&self) -> (u32, u32);
 }
 
@@ -128,8 +128,16 @@ pub fn create_capturer(config: CaptureConfig) -> Result<Box<dyn ScreenCapturer>,
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = config;
-        Err(CaptureError::UnsupportedPlatform)
+        #[cfg(feature = "fallback")]
+        {
+            use crate::scrap_capture::ScrapCapturer;
+            ScrapCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
+        }
+        #[cfg(not(feature = "fallback"))]
+        {
+            let _ = config;
+            Err(CaptureError::UnsupportedPlatform)
+        }
     }
 }
 
@@ -231,10 +239,29 @@ mod tests {
 
     // ── create_capturer ───────────────────────────────────────────────────────
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
     #[test]
     fn test_create_capturer_unsupported_on_non_windows() {
         let result = create_capturer(CaptureConfig::default());
         assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
+    }
+
+    #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
+    #[test]
+    fn test_create_capturer_returns_scrap_on_non_windows_with_fallback() {
+        let result = create_capturer(CaptureConfig::default());
+        // Success depends on display/permission availability; just verify
+        // that we don't get `UnsupportedPlatform`.
+        match result {
+            Ok(capturer) => {
+                let (w, h) = capturer.resolution();
+                assert!(w > 0);
+                assert!(h > 0);
+            }
+            Err(CaptureError::InitializationFailed(_)) => {
+                // Expected on headless CI or without screen-recording permission.
+            }
+            Err(other) => panic!("unexpected error variant: {other}"),
+        }
     }
 }
