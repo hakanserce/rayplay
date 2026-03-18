@@ -211,7 +211,7 @@ pub fn create_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, Vi
             use crate::openh264_enc::OpenH264Encoder;
             let fallback_config =
                 EncoderConfig::with_codec(config.width, config.height, config.fps, Codec::H264)
-                    .with_bitrate(config.bitrate.clone());
+                    .with_bitrate(config.bitrate);
             OpenH264Encoder::new(fallback_config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
         }
         #[cfg(not(feature = "fallback"))]

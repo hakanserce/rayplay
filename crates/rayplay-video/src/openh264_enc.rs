@@ -69,7 +69,11 @@ impl OpenH264Encoder {
 /// Fixed-point coefficients use a 16-bit shift (multiply by 65 536) so all
 /// arithmetic stays in `i32`, which is substantially faster than `f32` on most
 /// CPUs and avoids rounding-mode surprises.
-#[allow(clippy::many_single_char_names, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn bgra_to_yuv(data: &[u8], width: u32, height: u32, stride: u32) -> YUVBuffer {
     // Fixed-point BT.601 coefficients (×65 536)
     const FP_SHIFT: i32 = 16;

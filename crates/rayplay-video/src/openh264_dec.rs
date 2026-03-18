@@ -190,22 +190,20 @@ mod tests {
             .expect("encoder should produce a packet");
 
         let mut decoder = OpenH264Decoder::new(Codec::H264).unwrap();
-        let decoded = decoder.decode(&packet).unwrap();
+        let decoded_frame = decoder
+            .decode(&packet)
+            .unwrap()
+            .expect("decoder should produce a frame for the first keyframe");
 
-        // OpenH264 may need multiple frames to produce output; if the first
-        // frame is returned, validate it.
-        if let Some(decoded_frame) = decoded {
-            assert_eq!(decoded_frame.width, 64);
-            assert_eq!(decoded_frame.height, 64);
-            assert_eq!(decoded_frame.format, PixelFormat::Bgra8);
-            assert_eq!(decoded_frame.timestamp_us, 42_000);
-            assert!(!decoded_frame.data.is_empty());
-            // Verify pixel data is non-zero
-            assert!(
-                decoded_frame.data.iter().any(|&b| b != 0),
-                "decoded frame should have non-zero pixel data"
-            );
-        }
+        assert_eq!(decoded_frame.width, 64);
+        assert_eq!(decoded_frame.height, 64);
+        assert_eq!(decoded_frame.format, PixelFormat::Bgra8);
+        assert_eq!(decoded_frame.timestamp_us, 42_000);
+        assert!(!decoded_frame.data.is_empty());
+        assert!(
+            decoded_frame.data.iter().any(|&b| b != 0),
+            "decoded frame should have non-zero pixel data"
+        );
     }
 
     #[test]
@@ -249,6 +247,44 @@ mod tests {
         let dbg = format!("{dec:?}");
         assert!(dbg.contains("OpenH264Decoder"));
         assert!(dbg.contains("H264"));
+    }
+
+    #[test]
+    fn test_openh264_decoder_returns_none_for_parameter_sets_only() {
+        use crate::encoder::{EncoderConfig, EncoderInput, VideoEncoder};
+        use crate::frame::RawFrame;
+        use crate::openh264_enc::OpenH264Encoder;
+
+        // Encode a real frame to get a valid bitstream with SPS/PPS + slice NALs.
+        let config = EncoderConfig::with_codec(64, 64, 30, Codec::H264);
+        let mut encoder = OpenH264Encoder::new(config).unwrap();
+        let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 0);
+        let packet = encoder
+            .encode(EncoderInput::Cpu(&frame))
+            .unwrap()
+            .expect("packet");
+
+        // Extract only the SPS NAL (starts at byte 0, type 0x67).
+        // Walk Annex-B start codes to find just the SPS.
+        let data = &packet.data;
+        let mut nal_starts = vec![];
+        for i in 0..data.len().saturating_sub(3) {
+            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
+                nal_starts.push(i);
+            }
+        }
+
+        // Feed only the first NAL (SPS) — decoder should buffer and return None.
+        if nal_starts.len() >= 2 {
+            let sps_only = &data[nal_starts[0]..nal_starts[1]];
+            let sps_packet = EncodedPacket::new(sps_only.to_vec(), false, 0, 0);
+            let mut dec = OpenH264Decoder::new(Codec::H264).unwrap();
+            let result = dec.decode(&sps_packet).unwrap();
+            assert!(
+                result.is_none(),
+                "SPS-only packet should not produce a decoded frame"
+            );
+        }
     }
 
     #[test]
