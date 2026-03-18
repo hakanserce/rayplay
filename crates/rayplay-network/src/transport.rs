@@ -20,20 +20,17 @@
 //! A self-signed certificate is generated via `rcgen` for development and
 //! testing. ADR-007 will replace this with a SPAKE2 pairing flow.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
-use quinn::{
-    ClientConfig, Connection, Endpoint, ServerConfig,
-    crypto::rustls::{QuicClientConfig, QuicServerConfig},
-};
-use rustls::RootCertStore;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use quinn::{Connection, Endpoint};
+use rustls::pki_types::CertificateDer;
 
 use rayplay_video::packet::EncodedPacket;
 
 use crate::{
     fragmenter::VideoFragmenter,
     reassembler::{MAX_IN_FLIGHT_FRAMES, VideoReassembler},
+    transport_tls::{make_client_config, make_server_config},
     wire::{TransportError, VideoFragment},
 };
 
@@ -78,7 +75,7 @@ impl QuicListener {
             .accept()
             .await
             .ok_or(TransportError::EndpointClosed)?;
-        let connection = incoming.await?; // coverage:excl-line: QUIC TLS handshake failure requires a rogue client
+        let connection = incoming.await?;
         Ok(QuicVideoTransport::from_connection(connection))
     }
 }
@@ -104,8 +101,8 @@ impl QuicVideoTransport {
     ///
     /// Returns [`TransportError`] if TLS generation or socket binding fails.
     pub fn listen(bind_addr: SocketAddr) -> Result<(QuicListener, Vec<u8>), TransportError> {
-        let (cert_der, server_config) = make_server_config()?; // coverage:excl-line: rcgen cert generation failure is not reproducible in tests
-        let endpoint = Endpoint::server(server_config, bind_addr)?; // coverage:excl-line: socket bind failure requires an OS-level error
+        let (cert_der, server_config) = make_server_config()?;
+        let endpoint = Endpoint::server(server_config, bind_addr)?;
         Ok((QuicListener { endpoint }, cert_der.as_ref().to_vec()))
     }
 
@@ -130,9 +127,9 @@ impl QuicVideoTransport {
     ) -> Result<Self, TransportError> {
         let client_config = make_client_config(CertificateDer::from(server_cert))?;
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("valid wildcard address");
-        let mut endpoint = Endpoint::client(bind_addr)?; // coverage:excl-line: socket bind failure requires an OS-level error
+        let mut endpoint = Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(client_config);
-        let connection = endpoint.connect(server_addr, "localhost")?.await?; // coverage:excl-line: connection failure requires live network error or TLS mismatch
+        let connection = endpoint.connect(server_addr, "localhost")?.await?;
         Ok(Self::from_connection(connection))
     }
 
@@ -177,8 +174,8 @@ impl QuicVideoTransport {
     /// connection is lost.
     pub async fn recv_video(&mut self) -> Result<EncodedPacket, TransportError> {
         loop {
-            let datagram = self.connection.read_datagram().await?; // coverage:excl-line: connection loss requires a live network failure
-            let frag = VideoFragment::decode(&datagram)?; // coverage:excl-line: QUIC integrity guarantees well-formed datagrams in practice
+            let datagram = self.connection.read_datagram().await?;
+            let frag = VideoFragment::decode(&datagram)?;
 
             // Evict frames outside the sliding window to bound memory.
             #[allow(clippy::cast_possible_truncation)]
@@ -194,99 +191,11 @@ impl QuicVideoTransport {
     }
 }
 
-// ── TLS helpers ───────────────────────────────────────────────────────────────
-
-/// Generates a self-signed TLS certificate and a matching [`ServerConfig`]
-/// with datagram support enabled.
-fn make_server_config() -> Result<(CertificateDer<'static>, ServerConfig), TransportError> {
-    let rcgen::CertifiedKey { cert, key_pair } =
-        rcgen::generate_simple_self_signed(["localhost".to_owned()])
-            .map_err(|e| TransportError::TlsError(e.to_string()))?; // coverage:excl-line: rcgen self-signed cert generation virtually never fails
-
-    let cert_der: CertificateDer<'static> = cert.der().clone();
-    let priv_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
-
-    let server_crypto = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert_der.clone()], priv_key)
-        .map_err(|e| TransportError::TlsError(e.to_string()))?; // coverage:excl-line: rustls rejects the cert only if rcgen produces an invalid key pair
-
-    let quic_server_config = QuicServerConfig::try_from(server_crypto)
-        .map_err(|e| TransportError::TlsError(e.to_string()))?; // coverage:excl-line: QuicServerConfig wrapping fails only on unsupported TLS config
-
-    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
-    // Enable datagram support by setting a non-None receive buffer.
-    Arc::get_mut(&mut server_config.transport)
-        .expect("no other Arc references at construction time")
-        .datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
-
-    Ok((cert_der, server_config))
-}
-
-/// Builds a [`ClientConfig`] that trusts exactly one server certificate, with
-/// datagram support enabled.
-fn make_client_config(
-    server_cert: CertificateDer<'static>,
-) -> Result<ClientConfig, TransportError> {
-    let mut roots = RootCertStore::empty();
-    roots
-        .add(server_cert)
-        .map_err(|e| TransportError::TlsError(e.to_string()))?;
-
-    let client_crypto = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-
-    let quic_client_config = QuicClientConfig::try_from(client_crypto)
-        .map_err(|e| TransportError::TlsError(e.to_string()))?; // coverage:excl-line: QuicClientConfig wrapping fails only on unsupported TLS config
-
-    let mut transport_config = quinn::TransportConfig::default();
-    transport_config.datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
-
-    let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
-    client_config.transport_config(Arc::new(transport_config));
-
-    Ok(client_config)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── TLS helpers ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_make_server_config_succeeds() {
-        assert!(make_server_config().is_ok());
-    }
-
-    #[test]
-    fn test_make_server_config_cert_starts_with_sequence_tag() {
-        let (cert_der, _) = make_server_config().unwrap();
-        assert!(!cert_der.is_empty());
-        assert_eq!(cert_der[0], 0x30);
-    }
-
-    #[test]
-    fn test_make_server_config_produces_unique_certs() {
-        let (c1, _) = make_server_config().unwrap();
-        let (c2, _) = make_server_config().unwrap();
-        assert_ne!(c1.as_ref(), c2.as_ref());
-    }
-
-    #[test]
-    fn test_make_client_config_succeeds_with_valid_cert() {
-        let (cert_der, _) = make_server_config().unwrap();
-        assert!(make_client_config(cert_der).is_ok());
-    }
-
-    #[test]
-    fn test_make_client_config_fails_with_garbage_cert() {
-        let bad = CertificateDer::from(vec![0u8; 16]);
-        assert!(make_client_config(bad).is_err());
-    }
 
     // ── QuicListener::local_addr ──────────────────────────────────────────────
     // `quinn::Endpoint::server` requires a tokio runtime even though `listen`

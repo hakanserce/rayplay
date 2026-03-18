@@ -19,6 +19,7 @@
 //! ```
 
 pub mod capture;
+pub mod capture_factory;
 pub mod chunker;
 pub mod decoded_frame;
 pub mod decoder;
@@ -50,9 +51,10 @@ pub mod d3d11_device;
 #[cfg(target_os = "windows")]
 pub mod dxgi_capture;
 
-pub use capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer, create_capturer};
+pub use capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};
 #[cfg(target_os = "windows")]
 pub use capture::{CapturedTexture, ZeroCopyCapturer};
+pub use capture_factory::create_capturer;
 pub use chunker::{DEFAULT_CHUNK_SIZE, FrameChunker, NetworkChunk};
 #[cfg(target_os = "windows")]
 pub use d3d11_device::SharedD3D11Device;

@@ -286,6 +286,52 @@ mod tests {
     }
 
     #[test]
+    fn test_yuv_to_bgra_extreme_high_v_clamps_r_to_max() {
+        use openh264::formats::YUVSlices;
+        // Y=255, U=0, V=255 → R exceeds 255 before clamping (exercises upper clamp)
+        let y = vec![255u8; 4];
+        let u = vec![0u8; 1];
+        let v = vec![255u8; 1];
+        let slices = YUVSlices::new((&y, &u, &v), (2, 2), (2, 1, 1));
+        let bgra = yuv_to_bgra(&slices);
+        assert_eq!(bgra.len(), 2 * 2 * 4);
+        assert_eq!(bgra[2], 255, "R should be clamped to 255");
+        assert_eq!(bgra[3], 255);
+    }
+
+    #[test]
+    fn test_yuv_to_bgra_extreme_uv_clamps_g_to_zero() {
+        use openh264::formats::YUVSlices;
+        // Y=0, U=255, V=255 → G goes deeply negative before clamping
+        let y = vec![0u8; 4];
+        let u = vec![255u8; 1];
+        let v = vec![255u8; 1];
+        let slices = YUVSlices::new((&y, &u, &v), (2, 2), (2, 1, 1));
+        let bgra = yuv_to_bgra(&slices);
+        assert_eq!(bgra.len(), 2 * 2 * 4);
+        assert_eq!(bgra[1], 0, "G should be clamped to 0");
+        assert_eq!(bgra[3], 255);
+    }
+
+    #[test]
+    fn test_yuv_to_bgra_mid_gray() {
+        use openh264::formats::YUVSlices;
+        // Y=128, U=128, V=128 → mid-gray
+        let y = vec![128u8; 4];
+        let u = vec![128u8; 1];
+        let v = vec![128u8; 1];
+        let slices = YUVSlices::new((&y, &u, &v), (2, 2), (2, 1, 1));
+        let bgra = yuv_to_bgra(&slices);
+        for pixel in bgra.chunks_exact(4) {
+            // Should be around 128 for all channels
+            assert!(pixel[0] > 100 && pixel[0] < 160, "B={}", pixel[0]);
+            assert!(pixel[1] > 100 && pixel[1] < 160, "G={}", pixel[1]);
+            assert!(pixel[2] > 100 && pixel[2] < 160, "R={}", pixel[2]);
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    #[test]
     fn test_openh264_decoder_decode_invalid_data_returns_error_or_none() {
         let mut dec = OpenH264Decoder::new(Codec::H264).unwrap();
         // Feed garbage data — decoder may error or return None

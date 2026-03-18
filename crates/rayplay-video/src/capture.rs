@@ -3,8 +3,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::pipeline_mode::PipelineMode;
-
 #[derive(Debug, Error)]
 pub enum CaptureError {
     #[error("screen capture is not supported on this platform")]
@@ -48,6 +46,26 @@ impl CapturedFrame {
     #[must_use]
     pub fn buffer_size(&self) -> usize {
         self.stride as usize * self.height as usize
+    }
+}
+
+/// Builds a [`CapturedFrame`] from raw BGRA pixel data and dimensions.
+///
+/// Derives stride from the actual data length rather than assuming `width * 4`,
+/// because scrap may return rows with platform-specific alignment padding.
+pub(crate) fn build_frame(data: Vec<u8>, width: u32, height: u32) -> CapturedFrame {
+    #[allow(clippy::cast_possible_truncation)]
+    let stride = if height == 0 {
+        width * 4
+    } else {
+        (data.len() / height as usize) as u32
+    };
+    CapturedFrame {
+        width,
+        height,
+        stride,
+        data,
+        timestamp: Instant::now(),
     }
 }
 
@@ -105,58 +123,6 @@ pub trait ScreenCapturer: Send {
     /// is available within the configured timeout.
     fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError>;
     fn resolution(&self) -> (u32, u32);
-}
-
-/// Returns the platform-appropriate screen capturer.
-///
-/// On Windows, returns a [`DxgiCapture`](crate::dxgi_capture::DxgiCapture) backed by
-/// DXGI Desktop Duplication.  On other platforms returns
-/// [`CaptureError::UnsupportedPlatform`].
-///
-/// # Errors
-///
-/// Returns [`CaptureError::InitializationFailed`] if the D3D11 device or output
-/// duplication cannot be created.
-pub fn create_capturer(
-    config: CaptureConfig,
-    mode: PipelineMode,
-) -> Result<Box<dyn ScreenCapturer>, CaptureError> {
-    if mode == PipelineMode::Software {
-        #[cfg(feature = "fallback")]
-        {
-            use crate::scrap_capture::ScrapCapturer;
-            return ScrapCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>);
-        }
-        #[cfg(not(feature = "fallback"))]
-        {
-            let _ = config;
-            return Err(CaptureError::UnsupportedPlatform);
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::sync::Arc;
-
-        use crate::d3d11_device::SharedD3D11Device;
-        use crate::dxgi_capture::DxgiCapture;
-
-        let device = Arc::new(SharedD3D11Device::new()?);
-        DxgiCapture::new(config, device).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        #[cfg(feature = "fallback")]
-        {
-            use crate::scrap_capture::ScrapCapturer;
-            ScrapCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
-        }
-        #[cfg(not(feature = "fallback"))]
-        {
-            let _ = config;
-            Err(CaptureError::UnsupportedPlatform)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -255,57 +221,59 @@ mod tests {
         assert!(msg.contains("timed out"));
     }
 
-    // ── create_capturer ───────────────────────────────────────────────────────
+    // ── build_frame ─────────────────────────────────────────────────────────
 
-    #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
     #[test]
-    fn test_create_capturer_unsupported_on_non_windows() {
-        let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);
-        assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
+    fn test_build_frame_dimensions() {
+        let data = vec![0u8; 8 * 4 * 6];
+        let frame = build_frame(data, 8, 6);
+        assert_eq!(frame.width, 8);
+        assert_eq!(frame.height, 6);
     }
 
-    #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
     #[test]
-    fn test_create_capturer_returns_scrap_on_non_windows_with_fallback() {
-        let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);
-        // Success depends on display/permission availability; just verify
-        // that we don't get `UnsupportedPlatform`.
-        match result {
-            Ok(capturer) => {
-                let (w, h) = capturer.resolution();
-                assert!(w > 0);
-                assert!(h > 0);
-            }
-            Err(CaptureError::InitializationFailed(_)) => {
-                // Expected on headless CI or without screen-recording permission.
-            }
-            Err(other) => panic!("unexpected error variant: {other}"),
-        }
+    fn test_build_frame_stride_from_data_length() {
+        // 10px wide, but data has 48 bytes per row (padded to 12 pixels).
+        let data = vec![0u8; 48 * 5];
+        let frame = build_frame(data, 10, 5);
+        assert_eq!(frame.stride, 48);
     }
 
-    // ── Software mode ─────────────────────────────────────────────────────────
-
-    #[cfg(feature = "fallback")]
     #[test]
-    fn test_create_capturer_software_mode_uses_scrap() {
-        let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);
-        match result {
-            Ok(capturer) => {
-                let (w, h) = capturer.resolution();
-                assert!(w > 0);
-                assert!(h > 0);
-            }
-            Err(CaptureError::InitializationFailed(_)) => {
-                // Expected on headless CI or without screen-recording permission.
-            }
-            Err(other) => panic!("unexpected error variant: {other}"),
-        }
+    fn test_build_frame_stride_no_padding() {
+        let data = vec![0u8; 10 * 4 * 5];
+        let frame = build_frame(data, 10, 5);
+        assert_eq!(frame.stride, 40);
     }
 
-    #[cfg(not(feature = "fallback"))]
     #[test]
-    fn test_create_capturer_software_mode_unsupported_without_fallback() {
-        let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);
-        assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
+    fn test_build_frame_preserves_data() {
+        let data: Vec<u8> = (0..16).collect();
+        let expected = data.clone();
+        let frame = build_frame(data, 2, 2);
+        assert_eq!(frame.data, expected);
+    }
+
+    #[test]
+    fn test_build_frame_buffer_size() {
+        let data = vec![0xFFu8; 1920 * 4 * 1080];
+        let frame = build_frame(data, 1920, 1080);
+        assert_eq!(frame.buffer_size(), 1920 * 4 * 1080);
+    }
+
+    #[test]
+    fn test_build_frame_zero_height_uses_width() {
+        let frame = build_frame(vec![], 0, 0);
+        assert_eq!(frame.stride, 0);
+        assert!(frame.data.is_empty());
+    }
+
+    #[test]
+    fn test_build_frame_timestamp_is_recent() {
+        let before = Instant::now();
+        let frame = build_frame(vec![0u8; 4], 1, 1);
+        let after = Instant::now();
+        assert!(frame.timestamp >= before);
+        assert!(frame.timestamp <= after);
     }
 }
