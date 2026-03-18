@@ -392,6 +392,45 @@ mod tests {
         assert!(err.to_string().contains("send datagram"));
     }
 
+    // ── TLS config tests (moved from transport_tls.rs for coverage) ─────────
+
+    #[test]
+    fn test_make_server_config_succeeds() {
+        use crate::transport_tls::make_server_config;
+        assert!(make_server_config().is_ok());
+    }
+
+    #[test]
+    fn test_make_server_config_cert_starts_with_sequence_tag() {
+        use crate::transport_tls::make_server_config;
+        let (cert_der, _) = make_server_config().unwrap();
+        assert!(!cert_der.is_empty());
+        assert_eq!(cert_der[0], 0x30);
+    }
+
+    #[test]
+    fn test_make_server_config_produces_unique_certs() {
+        use crate::transport_tls::make_server_config;
+        let (c1, _) = make_server_config().unwrap();
+        let (c2, _) = make_server_config().unwrap();
+        assert_ne!(c1.as_ref(), c2.as_ref());
+    }
+
+    #[test]
+    fn test_make_client_config_succeeds_with_valid_cert() {
+        use crate::transport_tls::{make_client_config, make_server_config};
+        let (cert_der, _) = make_server_config().unwrap();
+        assert!(make_client_config(cert_der).is_ok());
+    }
+
+    #[test]
+    fn test_make_client_config_fails_with_garbage_cert() {
+        use crate::transport_tls::make_client_config;
+        use rustls::pki_types::CertificateDer;
+        let bad = CertificateDer::from(vec![0u8; 16]);
+        assert!(make_client_config(bad).is_err());
+    }
+
     #[tokio::test]
     async fn test_from_connection_uses_default_fragment_payload() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();

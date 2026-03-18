@@ -31,6 +31,8 @@ pub mod pipeline_mode;
 pub mod render_window;
 pub mod renderer;
 pub mod videotoolbox;
+#[cfg(target_os = "macos")]
+mod wgpu_iosurface;
 pub mod wgpu_renderer;
 mod wgpu_surface;
 

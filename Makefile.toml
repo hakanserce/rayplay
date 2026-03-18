@@ -67,8 +67,8 @@ command = "cargo"
 #     cannot be constructed outside the event loop.
 #   wgpu_surface.rs    — requires a live wgpu::Surface backed by a real OS
 #     window (create_surface, adapter selection, swap-chain configure).
-#   wgpu_renderer.rs   — Metal texture import, IOSurface interop, and GPU
-#     bind-group creation that require a live GPU context.
+#   wgpu_iosurface.rs  — IOSurface → Metal → wgpu texture import; macOS
+#     Metal FFI that requires a live GPU context.
 #   test_helper.rs     — shared test doubles; testing test helpers adds no value.
 #   ffmpeg_enc.rs, ffmpeg_dec.rs — FFmpeg feature not enabled in default CI;
 #     tested in the dedicated ffmpeg-check CI job.
@@ -79,7 +79,7 @@ command = "cargo"
 #   connect.rs         — macOS-only async QUIC connect with reconnect loop;
 #     platform-gated (#[cfg(target_os = "macos")]) glue code.
 #   receive.rs         — async receive-decode loop tightly coupled to connect.rs.
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_renderer\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|connect\\.rs|receive\\.rs"]
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|connect\\.rs|receive\\.rs"]
 
 # ─── Benchmarks ────────────────────────────────────────────────────────────────
 

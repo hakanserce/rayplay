@@ -6,6 +6,8 @@ use rayplay_network::QuicVideoTransport;
 use rayplay_video::{DecodedFrame, decoder::VideoDecoder};
 use tokio_util::sync::CancellationToken;
 
+use super::decode_dispatch::{DispatchResult, decode_and_dispatch};
+
 /// Receives encoded packets from `transport`, decodes them, and forwards decoded
 /// frames to `frame_tx` until shutdown or the rendering channel disconnects.
 ///
@@ -31,27 +33,8 @@ pub(crate) async fn run_receive_loop(
 
         tracing::debug!(size = packet.data.len(), "packet_received");
 
-        match decoder.decode(&packet) {
-            Ok(Some(frame)) => {
-                tracing::debug!(
-                    timestamp_us = frame.timestamp_us,
-                    width = frame.width,
-                    height = frame.height,
-                    "frame_decoded"
-                );
-                match frame_tx.try_send(frame) {
-                    Ok(()) => {}
-                    Err(crossbeam_channel::TrySendError::Full(_)) => {
-                        tracing::trace!("Renderer is behind, frame dropped");
-                    }
-                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                        tracing::debug!("Frame channel closed, stopping receive loop");
-                        break;
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => tracing::warn!(error = %e, "Decode error, skipping packet"),
+        if decode_and_dispatch(&mut *decoder, &packet, &frame_tx) == DispatchResult::ChannelClosed {
+            break;
         }
     }
     Ok(())
