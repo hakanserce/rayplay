@@ -13,6 +13,7 @@
 pub mod fragmenter;
 pub mod reassembler;
 pub mod transport;
+pub(crate) mod transport_tls;
 pub mod wire;
 
 pub use fragmenter::VideoFragmenter;

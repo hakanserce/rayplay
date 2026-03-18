@@ -10,7 +10,6 @@ use tracing_subscriber::EnvFilter;
 
 use host::{HostArgs, HostConfig};
 
-// llvm-cov:excl-start
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -51,4 +50,3 @@ async fn main() -> Result<()> {
 
     host::serve(listener, config, token).await
 }
-// llvm-cov:excl-stop

@@ -5,6 +5,7 @@
 
 mod config;
 mod connect;
+mod decode_dispatch;
 mod receive;
 #[cfg(test)]
 pub(crate) mod test_helper;

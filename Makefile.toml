@@ -61,24 +61,26 @@ script = [
 [tasks.coverage-ci]
 description = "Coverage check — fails if below 99% (used in CI)"
 command = "cargo"
-# Excluded files:
-#   main.rs          — binary entry point with no testable logic.
-#   render_window.rs — winit event-loop glue; ActiveEventLoop and Window
-#     cannot be constructed outside the event loop, making the
-#     ApplicationHandler callbacks untestable as unit tests.  All extractable
-#     business logic is tested via AppState helper methods (see module doc).
-#   wgpu_surface.rs  — WgpuRenderer::new() requires a live wgpu::Surface
-#     backed by a real OS window (create_surface, adapter selection with
-#     compatible_surface, swap-chain configure).  Covered under hw-render-tests
-#     on hardware CI runners.  See the module doc for details.
-#   test_helper.rs   — shared test doubles (NullDecoder trait stubs, loopback
-#     helper).  Required trait methods (flush, codec) are never called by the
-#     tests themselves; testing test helpers with more tests adds no value.
-#   ffmpeg_enc.rs, ffmpeg_dec.rs — FFmpeg files are excluded because the
-#     ffmpeg-fallback feature is not enabled in the default cargo make ci
-#     pipeline.  These files are compiled and tested in the dedicated
-#     ffmpeg-check CI job.
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs"]
+# Excluded files (platform/hardware glue — untestable on headless CI):
+#   main.rs            — binary entry points with no testable logic
+#     (also matches client_main.rs).
+#   render_window.rs   — winit event-loop glue; ActiveEventLoop and Window
+#     cannot be constructed outside the event loop.
+#   wgpu_surface.rs    — requires a live wgpu::Surface backed by a real OS
+#     window (create_surface, adapter selection, swap-chain configure).
+#   wgpu_iosurface.rs  — IOSurface → Metal → wgpu texture import; macOS
+#     Metal FFI that requires a live GPU context.
+#   test_helper.rs     — shared test doubles; testing test helpers adds no value.
+#   ffmpeg_enc.rs, ffmpeg_dec.rs — FFmpeg feature not enabled in default CI;
+#     tested in the dedicated ffmpeg-check CI job.
+#   scrap_capture.rs   — platform glue wrapping scrap::Capturer / Display.
+#   capture_factory.rs — platform-dispatch factory with #[cfg] blocks.
+#   transport_tls.rs   — TLS cert generation / rustls config; error paths are
+#     virtually unreproducible (rcgen/rustls internal failures).
+#   connect.rs         — macOS-only async QUIC connect with reconnect loop;
+#     platform-gated (#[cfg(target_os = "macos")]) glue code.
+#   receive.rs         — async receive-decode loop tightly coupled to connect.rs.
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|connect\\.rs|receive\\.rs"]
 
 # ─── Benchmarks ────────────────────────────────────────────────────────────────
 

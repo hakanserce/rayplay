@@ -7,8 +7,6 @@ use clap::Parser;
 use client::{ClientArgs, ClientConfig};
 use rayplay_video::{DecodedFrame, RenderWindow};
 
-// llvm-cov:excl-start
-
 /// Supported on macOS only; other platforms bail with a clear message.
 #[cfg(not(target_os = "macos"))]
 fn main() -> Result<()> {
@@ -79,5 +77,3 @@ fn main() -> Result<()> {
 
     render_result.map_err(|e| anyhow::anyhow!("render window: {e}"))
 }
-
-// llvm-cov:excl-stop

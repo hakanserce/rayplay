@@ -1,8 +1,6 @@
-use std::time::Instant;
-
 use scrap::{Capturer, Display};
 
-use crate::capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};
+use crate::capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer, build_frame};
 
 /// Thin abstraction over `scrap::Capturer` to allow unit-testing without a
 /// real display.
@@ -58,26 +56,6 @@ impl ScrapCapturer {
     }
 }
 
-/// Builds a [`CapturedFrame`] from raw BGRA pixel data and dimensions.
-///
-/// Derives stride from the actual data length rather than assuming `width * 4`,
-/// because scrap may return rows with platform-specific alignment padding.
-fn build_frame(data: Vec<u8>, width: u32, height: u32) -> CapturedFrame {
-    #[allow(clippy::cast_possible_truncation)]
-    let stride = if height == 0 {
-        width * 4
-    } else {
-        (data.len() / height as usize) as u32
-    };
-    CapturedFrame {
-        width,
-        height,
-        stride,
-        data,
-        timestamp: Instant::now(),
-    }
-}
-
 impl ScreenCapturer for ScrapCapturer {
     fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
         let data = self
@@ -95,8 +73,6 @@ impl ScreenCapturer for ScrapCapturer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── mock frame source ───────────────────────────────────────────────────
 
     struct MockSource {
         data: Vec<u8>,
@@ -135,64 +111,6 @@ mod tests {
         }
     }
 
-    // ── build_frame ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_build_frame_dimensions() {
-        let data = vec![0u8; 8 * 4 * 6];
-        let frame = build_frame(data, 8, 6);
-        assert_eq!(frame.width, 8);
-        assert_eq!(frame.height, 6);
-    }
-
-    #[test]
-    fn test_build_frame_stride_from_data_length() {
-        // 10px wide, but data has 48 bytes per row (padded to 12 pixels).
-        let data = vec![0u8; 48 * 5];
-        let frame = build_frame(data, 10, 5);
-        assert_eq!(frame.stride, 48);
-    }
-
-    #[test]
-    fn test_build_frame_stride_no_padding() {
-        let data = vec![0u8; 10 * 4 * 5];
-        let frame = build_frame(data, 10, 5);
-        assert_eq!(frame.stride, 40);
-    }
-
-    #[test]
-    fn test_build_frame_preserves_data() {
-        let data: Vec<u8> = (0..16).collect();
-        let expected = data.clone();
-        let frame = build_frame(data, 2, 2);
-        assert_eq!(frame.data, expected);
-    }
-
-    #[test]
-    fn test_build_frame_buffer_size() {
-        let data = vec![0xFFu8; 1920 * 4 * 1080];
-        let frame = build_frame(data, 1920, 1080);
-        assert_eq!(frame.buffer_size(), 1920 * 4 * 1080);
-    }
-
-    #[test]
-    fn test_build_frame_zero_height_uses_width() {
-        let frame = build_frame(vec![], 0, 0);
-        assert_eq!(frame.stride, 0);
-        assert!(frame.data.is_empty());
-    }
-
-    #[test]
-    fn test_build_frame_timestamp_is_recent() {
-        let before = Instant::now();
-        let frame = build_frame(vec![0u8; 4], 1, 1);
-        let after = Instant::now();
-        assert!(frame.timestamp >= before);
-        assert!(frame.timestamp <= after);
-    }
-
-    // ── resolution (via mock) ───────────────────────────────────────────────
-
     #[test]
     fn test_resolution_returns_cached_values() {
         let capturer = make_test_capturer(1920, 1080, vec![]);
@@ -204,8 +122,6 @@ mod tests {
         let capturer = make_test_capturer(2560, 1440, vec![]);
         assert_eq!(capturer.resolution(), (2560, 1440));
     }
-
-    // ── capture_frame (via mock) ────────────────────────────────────────────
 
     #[test]
     fn test_capture_frame_returns_correct_dimensions() {
@@ -233,15 +149,11 @@ mod tests {
         assert!(err.to_string().contains("no frame"));
     }
 
-    // ── type-level assertions ───────────────────────────────────────────────
-
     #[test]
     fn test_scrap_capturer_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ScrapCapturer>();
     }
-
-    // ── error mapping ───────────────────────────────────────────────────────
 
     #[test]
     fn test_capture_error_display_init() {
@@ -255,8 +167,6 @@ mod tests {
         let err = CaptureError::InitializationFailed("capturer: permission denied".to_string());
         assert!(err.to_string().contains("capturer"));
     }
-
-    // ── constructor ─────────────────────────────────────────────────────────
 
     #[test]
     fn test_new_returns_ok_or_initialization_error() {
@@ -273,8 +183,6 @@ mod tests {
             Err(other) => panic!("unexpected error variant: {other}"),
         }
     }
-
-    // ── hardware-dependent tests (need display + screen recording) ─────────
 
     #[cfg(feature = "hw-codec-tests")]
     #[test]
