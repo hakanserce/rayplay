@@ -57,12 +57,10 @@ Before starting any UC, update its GitHub Issue:
 - **Comments:** Only when code isn't self-explanatory; prefer refactoring for clarity
 
 ## Pre-Submit Checklist (EVERY change)
-1. `cargo fmt --all`
-2. `cargo clippy --workspace -- -W clippy::pedantic` — zero warnings
-3. All tests pass
-4. Coverage ≥99% — add tests if below
-5. Benchmark tests for performance-critical code (criterion)
-6. PR body includes `Closes #<issue-number>` for the UC's GitHub Issue
+1. Run `cargo make ci` — this single command runs fmt, clippy --pedantic, tests, and coverage (--fail-under-lines 99). If it passes, all quality gates are green.
+2. If coverage-ci fails, run `cargo llvm-cov --workspace` to see the detailed report, then add tests for uncovered paths.
+3. Benchmark tests for performance-critical code (criterion)
+4. PR body includes `Closes #<issue-number>` for the UC's GitHub Issue
 
 ## Working Style
 - Implement one UC at a time

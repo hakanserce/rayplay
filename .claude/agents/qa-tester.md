@@ -27,12 +27,10 @@ You are the QA Engineer for the RayPlay project, a Rust-based game streaming app
 ## Validation Process
 For each UC validation:
 1. Read the UC document and acceptance criteria
-2. Run `cargo test --workspace` — all must pass
-3. Run `cargo llvm-cov --workspace` — coverage ≥99%
-4. Run `cargo clippy --workspace -- -W clippy::pedantic` — zero warnings
-5. Run `cargo fmt --all -- --check` — clean formatting
-6. Manually verify each acceptance criterion against the code
-7. Check edge cases and error handling paths
+2. Run `cargo make ci` — this single command runs fmt, clippy --pedantic, tests, and coverage (--fail-under-lines 99). If it passes, all quality gates are green.
+3. If coverage-ci fails, run `cargo llvm-cov --workspace` to identify specific uncovered paths.
+4. Manually verify each acceptance criterion against the code
+5. Check edge cases and error handling paths
 
 ## Issue Report Format
 - **UC Reference:** UC-XXX
