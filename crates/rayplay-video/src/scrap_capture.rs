@@ -1,0 +1,283 @@
+use std::cell::RefCell;
+use std::time::Instant;
+
+use scrap::{Capturer, Display};
+
+use crate::capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};
+
+/// Thin abstraction over `scrap::Capturer` to allow unit-testing without a
+/// real display.
+trait FrameSource {
+    fn grab(&mut self) -> Result<Vec<u8>, std::io::Error>;
+}
+
+struct ScrapSource(Capturer);
+
+impl FrameSource for ScrapSource {
+    fn grab(&mut self) -> Result<Vec<u8>, std::io::Error> {
+        self.0.frame().map(|f| f.to_vec())
+    }
+}
+
+pub struct ScrapCapturer {
+    source: RefCell<Box<dyn FrameSource>>,
+    width: u32,
+    height: u32,
+}
+
+impl ScrapCapturer {
+    /// Creates a new `ScrapCapturer` targeting the primary display.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureError::InitializationFailed`] if the primary display
+    /// cannot be obtained or the capturer cannot be created.
+    pub fn new(_config: CaptureConfig) -> Result<Self, CaptureError> {
+        let display = Display::primary()
+            .map_err(|e| CaptureError::InitializationFailed(format!("primary display: {e}")))?;
+        #[allow(clippy::cast_possible_truncation)]
+        let width = display.width() as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let height = display.height() as u32;
+        let capturer = Capturer::new(display)
+            .map_err(|e| CaptureError::InitializationFailed(format!("capturer: {e}")))?;
+        Ok(Self {
+            source: RefCell::new(Box::new(ScrapSource(capturer))),
+            width,
+            height,
+        })
+    }
+}
+
+/// Builds a [`CapturedFrame`] from raw BGRA pixel data and dimensions.
+fn build_frame(data: Vec<u8>, width: u32, height: u32) -> CapturedFrame {
+    let stride = width * 4;
+    CapturedFrame {
+        width,
+        height,
+        stride,
+        data,
+        timestamp: Instant::now(),
+    }
+}
+
+impl ScreenCapturer for ScrapCapturer {
+    fn capture_frame(&self) -> Result<CapturedFrame, CaptureError> {
+        let mut source = self.source.borrow_mut();
+        let data = source
+            .grab()
+            .map_err(|e| CaptureError::AcquireFailed(e.to_string()))?;
+        Ok(build_frame(data, self.width, self.height))
+    }
+
+    fn resolution(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+// SAFETY: `ScrapCapturer` is used on a single capture thread. The `RefCell`
+// ensures no aliased borrows at runtime. `ScreenCapturer` requires `Send`
+// but not `Sync`.
+unsafe impl Send for ScrapCapturer {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── mock frame source ───────────────────────────────────────────────────
+
+    struct MockSource {
+        data: Vec<u8>,
+        fail: bool,
+    }
+
+    impl FrameSource for MockSource {
+        fn grab(&mut self) -> Result<Vec<u8>, std::io::Error> {
+            if self.fail {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "no frame",
+                ))
+            } else {
+                Ok(self.data.clone())
+            }
+        }
+    }
+
+    fn make_test_capturer(width: u32, height: u32, data: Vec<u8>) -> ScrapCapturer {
+        ScrapCapturer {
+            source: RefCell::new(Box::new(MockSource { data, fail: false })),
+            width,
+            height,
+        }
+    }
+
+    fn make_failing_capturer() -> ScrapCapturer {
+        ScrapCapturer {
+            source: RefCell::new(Box::new(MockSource {
+                data: vec![],
+                fail: true,
+            })),
+            width: 100,
+            height: 100,
+        }
+    }
+
+    // ── build_frame ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_frame_dimensions() {
+        let data = vec![0u8; 8 * 4 * 6];
+        let frame = build_frame(data, 8, 6);
+        assert_eq!(frame.width, 8);
+        assert_eq!(frame.height, 6);
+    }
+
+    #[test]
+    fn test_build_frame_stride() {
+        let data = vec![0u8; 10 * 4 * 5];
+        let frame = build_frame(data, 10, 5);
+        assert_eq!(frame.stride, 40);
+    }
+
+    #[test]
+    fn test_build_frame_preserves_data() {
+        let data: Vec<u8> = (0..16).collect();
+        let expected = data.clone();
+        let frame = build_frame(data, 2, 2);
+        assert_eq!(frame.data, expected);
+    }
+
+    #[test]
+    fn test_build_frame_buffer_size() {
+        let data = vec![0xFFu8; 1920 * 4 * 1080];
+        let frame = build_frame(data, 1920, 1080);
+        assert_eq!(frame.buffer_size(), 1920 * 4 * 1080);
+    }
+
+    #[test]
+    fn test_build_frame_empty() {
+        let frame = build_frame(vec![], 0, 0);
+        assert_eq!(frame.width, 0);
+        assert_eq!(frame.height, 0);
+        assert_eq!(frame.stride, 0);
+        assert!(frame.data.is_empty());
+    }
+
+    #[test]
+    fn test_build_frame_timestamp_is_recent() {
+        let before = Instant::now();
+        let frame = build_frame(vec![0u8; 4], 1, 1);
+        let after = Instant::now();
+        assert!(frame.timestamp >= before);
+        assert!(frame.timestamp <= after);
+    }
+
+    // ── resolution (via mock) ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resolution_returns_cached_values() {
+        let capturer = make_test_capturer(1920, 1080, vec![]);
+        assert_eq!(capturer.resolution(), (1920, 1080));
+    }
+
+    #[test]
+    fn test_resolution_different_values() {
+        let capturer = make_test_capturer(2560, 1440, vec![]);
+        assert_eq!(capturer.resolution(), (2560, 1440));
+    }
+
+    // ── capture_frame (via mock) ────────────────────────────────────────────
+
+    #[test]
+    fn test_capture_frame_returns_correct_dimensions() {
+        let data = vec![0u8; 4 * 4 * 3]; // 4×3 BGRA
+        let capturer = make_test_capturer(4, 3, data);
+        let frame = capturer.capture_frame().expect("should succeed");
+        assert_eq!(frame.width, 4);
+        assert_eq!(frame.height, 3);
+        assert_eq!(frame.stride, 16);
+    }
+
+    #[test]
+    fn test_capture_frame_returns_pixel_data() {
+        let data: Vec<u8> = (0..16).collect(); // 2×2 BGRA
+        let capturer = make_test_capturer(2, 2, data.clone());
+        let frame = capturer.capture_frame().expect("should succeed");
+        assert_eq!(frame.data, data);
+    }
+
+    #[test]
+    fn test_capture_frame_error_maps_to_acquire_failed() {
+        let capturer = make_failing_capturer();
+        let err = capturer.capture_frame().expect_err("should fail");
+        assert!(matches!(err, CaptureError::AcquireFailed(_)));
+        assert!(err.to_string().contains("no frame"));
+    }
+
+    // ── type-level assertions ───────────────────────────────────────────────
+
+    #[test]
+    fn test_scrap_capturer_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ScrapCapturer>();
+    }
+
+    // ── error mapping ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_capture_error_display_init() {
+        let err = CaptureError::InitializationFailed("primary display: no display".to_string());
+        assert!(err.to_string().contains("initialize"));
+        assert!(err.to_string().contains("no display"));
+    }
+
+    #[test]
+    fn test_capture_error_capturer_init() {
+        let err = CaptureError::InitializationFailed("capturer: permission denied".to_string());
+        assert!(err.to_string().contains("capturer"));
+    }
+
+    // ── constructor (exercises Display::primary path) ───────────────────────
+
+    #[test]
+    fn test_scrap_capturer_new_exercises_constructor() {
+        let result = ScrapCapturer::new(CaptureConfig::default());
+        match &result {
+            Ok(c) => {
+                let (w, h) = c.resolution();
+                assert!(w > 0);
+                assert!(h > 0);
+            }
+            Err(CaptureError::InitializationFailed(msg)) => {
+                assert!(msg.contains("display") || msg.contains("capturer"));
+            }
+            Err(other) => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    // ── hardware-dependent tests (need display + screen recording) ─────────
+
+    #[cfg(feature = "hw-codec-tests")]
+    #[test]
+    fn test_scrap_capturer_capture_frame_live() {
+        let capturer = ScrapCapturer::new(CaptureConfig::default())
+            .expect("hw-codec-tests requires display access");
+        let (w, h) = capturer.resolution();
+        for _ in 0..10 {
+            match capturer.capture_frame() {
+                Ok(frame) => {
+                    assert_eq!(frame.width, w);
+                    assert_eq!(frame.height, h);
+                    assert_eq!(frame.stride, w * 4);
+                    assert!(!frame.data.is_empty());
+                    return;
+                }
+                Err(CaptureError::AcquireFailed(_)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+    }
+}
