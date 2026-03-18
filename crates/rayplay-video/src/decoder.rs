@@ -121,7 +121,7 @@ mod tests {
         }
 
         fn codec(&self) -> Codec {
-            self.codec.clone()
+            self.codec
         }
     }
 

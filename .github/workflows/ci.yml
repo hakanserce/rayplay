@@ -40,6 +40,44 @@ jobs:
       - name: Run CI pipeline
         run: cargo make ci
 
+  ffmpeg-check:
+    name: FFmpeg Fallback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install FFmpeg dev libraries
+        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev pkg-config clang
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: $ runner.os -cargo-ffmpeg-$ hashFiles('**/Cargo.lock')
+          restore-keys: $ runner.os -cargo-ffmpeg-
+
+      - name: Compile check
+        run: cargo check --workspace --features ffmpeg-fallback
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run --workspace --features ffmpeg-fallback
+
+      - name: Lint
+        run: cargo clippy --workspace --features ffmpeg-fallback -- -W clippy::pedantic
+
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest

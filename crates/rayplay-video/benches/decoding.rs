@@ -135,7 +135,7 @@ fn bench_ffmpeg_decode(c: &mut Criterion) {
         ("h264_480p", 640, 480, Codec::H264),
         ("hevc_720p", 1280, 720, Codec::Hevc),
     ] {
-        let config = EncoderConfig::with_codec(w, h, 30, codec.clone());
+        let config = EncoderConfig::with_codec(w, h, 30, codec);
         let mut encoder = FfmpegEncoder::new(config).expect("FfmpegEncoder");
         let size = (w as usize) * (h as usize) * 4;
         let frame = RawFrame::new(vec![128u8; size], w, h, w * 4, 0);
@@ -153,8 +153,10 @@ fn bench_ffmpeg_decode(c: &mut Criterion) {
             let pixels = (w as usize) * (h as usize) * 4;
             group.throughput(Throughput::Bytes(pixels as u64));
             group.bench_with_input(BenchmarkId::new("decode", label), &packet, |b, packet| {
-                let mut decoder = FfmpegDecoder::new(codec.clone()).expect("FfmpegDecoder");
-                b.iter(|| std::hint::black_box(decoder.decode(packet)));
+                b.iter(|| {
+                    let mut decoder = FfmpegDecoder::new(codec).expect("FfmpegDecoder");
+                    std::hint::black_box(decoder.decode(packet))
+                });
             });
         }
     }

@@ -31,8 +31,10 @@ impl std::fmt::Debug for FfmpegDecoder {
     }
 }
 
-// SAFETY: FFmpeg decoder contexts are not thread-safe for concurrent access,
-// but are safe to move between threads (same single-owner model as OpenH264).
+// SAFETY: The FFmpeg decoder context (`AVCodecContext`) is a self-contained,
+// heap-allocated structure with no thread-local state. It is safe to move
+// between threads as long as only one thread accesses it at a time, which
+// `&mut self` on every method guarantees.
 unsafe impl Send for FfmpegDecoder {}
 
 impl FfmpegDecoder {
@@ -43,6 +45,7 @@ impl FfmpegDecoder {
     /// Returns [`VideoError::DecodingFailed`] if the FFmpeg decoder cannot be
     /// initialized.
     pub fn new(codec: Codec) -> Result<Self, VideoError> {
+        // Idempotent — safe to call from both encoder and decoder constructors
         ffmpeg_next::init().map_err(|e| VideoError::DecodingFailed {
             reason: format!("FFmpeg init failed: {e}"),
         })?;
@@ -67,6 +70,7 @@ impl FfmpegDecoder {
 
         Ok(Self {
             decoder,
+            // Lazy scaler — dimensions come from the decoded stream, not known at construction
             scaler: None,
             scaler_params: None,
             codec,
@@ -185,7 +189,7 @@ impl VideoDecoder for FfmpegDecoder {
     }
 
     fn codec(&self) -> Codec {
-        self.codec.clone()
+        self.codec
     }
 }
 
@@ -284,6 +288,18 @@ mod tests {
         let flushed = decoder.flush().unwrap();
         decoded_any = decoded_any || !flushed.is_empty();
         assert!(decoded_any, "decoder should produce at least one frame");
+    }
+
+    #[test]
+    fn test_ffmpeg_decoder_decode_invalid_data_returns_error_or_none() {
+        let mut dec = FfmpegDecoder::new(Codec::H264).unwrap();
+        let packet = EncodedPacket::new(vec![0xFF; 64], false, 0, 16_667);
+        let result = dec.decode(&packet);
+        match result {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("should not decode garbage into a frame"),
+            Err(_) => {}
+        }
     }
 
     #[test]

@@ -91,7 +91,7 @@ fn bench_raw_frame_alloc(c: &mut Criterion) {
 
 fn bench_bitrate_resolve(c: &mut Criterion) {
     c.bench_function("bitrate_auto_resolve_1080p60", |b| {
-        b.iter(|| black_box(Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60)))
+        b.iter(|| black_box(Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 60)))
     });
 }
 
@@ -183,7 +183,7 @@ fn bench_ffmpeg_encode(c: &mut Criterion) {
             BenchmarkId::new("encode", label),
             &(w, h, codec),
             |b, (w, h, codec)| {
-                let config = EncoderConfig::with_codec(*w, *h, 30, codec.clone());
+                let config = EncoderConfig::with_codec(*w, *h, 30, *codec);
                 let mut encoder = FfmpegEncoder::new(config).expect("FfmpegEncoder");
                 let frame = make_raw_frame(*w, *h, 0);
                 b.iter(|| black_box(encoder.encode(EncoderInput::Cpu(&frame))));

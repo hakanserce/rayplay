@@ -29,8 +29,10 @@ impl std::fmt::Debug for FfmpegEncoder {
     }
 }
 
-// SAFETY: FFmpeg encoder contexts are not thread-safe for concurrent access,
-// but are safe to move between threads (same single-owner model as OpenH264).
+// SAFETY: The FFmpeg encoder context (`AVCodecContext`) is a self-contained,
+// heap-allocated structure with no thread-local state. It is safe to move
+// between threads as long as only one thread accesses it at a time, which
+// `&mut self` on every method guarantees.
 unsafe impl Send for FfmpegEncoder {}
 
 impl FfmpegEncoder {
@@ -48,6 +50,7 @@ impl FfmpegEncoder {
             });
         }
 
+        // Idempotent — safe to call from both encoder and decoder constructors
         ffmpeg_next::init().map_err(|e| VideoError::EncodingFailed {
             reason: format!("FFmpeg init failed: {e}"),
         })?;
@@ -78,6 +81,7 @@ impl FfmpegEncoder {
         ctx.set_bit_rate(config.resolved_bitrate().into());
 
         let mut opts = Dictionary::new();
+        // ultrafast/zerolatency are valid for both libx264 and libx265
         opts.set("preset", "ultrafast");
         opts.set("tune", "zerolatency");
 
@@ -87,6 +91,7 @@ impl FfmpegEncoder {
                 reason: format!("FFmpeg encoder open failed: {e}"),
             })?;
 
+        // Eager scaler — dimensions are known at construction time
         let scaler = scaling::Context::get(
             Pixel::BGRA,
             config.width,
@@ -346,12 +351,10 @@ mod tests {
     #[test]
     fn test_ffmpeg_encoder_zero_fps_duration() {
         let config = EncoderConfig::with_codec(64, 64, 0, Codec::H264);
-        // zero fps may fail at encoder open; that's acceptable
-        if let Ok(mut enc) = FfmpegEncoder::new(config) {
-            let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 500);
-            if let Ok(Some(packet)) = enc.encode(EncoderInput::Cpu(&frame)) {
-                assert_eq!(packet.duration_us, 0);
-            }
+        let mut enc = FfmpegEncoder::new(config).expect("encoder should open with 0 fps");
+        let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 500);
+        if let Ok(Some(packet)) = enc.encode(EncoderInput::Cpu(&frame)) {
+            assert_eq!(packet.duration_us, 0);
         }
     }
 
@@ -364,8 +367,7 @@ mod tests {
     #[test]
     fn test_ffmpeg_encoder_duration_us_zero_fps() {
         let config = EncoderConfig::with_codec(64, 64, 0, Codec::H264);
-        if let Ok(enc) = FfmpegEncoder::new(config) {
-            assert_eq!(enc.duration_us(), 0);
-        }
+        let enc = FfmpegEncoder::new(config).expect("encoder should open with 0 fps");
+        assert_eq!(enc.duration_us(), 0);
     }
 }

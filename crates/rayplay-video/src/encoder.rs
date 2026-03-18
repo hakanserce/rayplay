@@ -60,7 +60,7 @@ impl fmt::Debug for EncoderInput<'_> {
 }
 
 /// Supported video codecs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
     /// H.265 / HEVC — default codec, hardware-accelerated on Nvidia RTX 2060+.
     Hevc,
@@ -80,7 +80,7 @@ pub enum Bitrate {
 impl Bitrate {
     /// Resolves the bitrate to bits per second for the given stream parameters.
     #[must_use]
-    pub fn resolve(&self, codec: &Codec, width: u32, height: u32, fps: u32) -> u32 {
+    pub fn resolve(&self, codec: Codec, width: u32, height: u32, fps: u32) -> u32 {
         match self {
             Self::Auto => compute_auto_bitrate(codec, width, height, fps),
             Self::Mbps(mbps) => mbps.saturating_mul(1_000_000),
@@ -96,7 +96,7 @@ impl Bitrate {
 ///
 /// Formula: `pixels * fps / COMPRESSION_FACTOR`, where the factor depends
 /// on the codec's compression efficiency.
-fn compute_auto_bitrate(codec: &Codec, width: u32, height: u32, fps: u32) -> u32 {
+fn compute_auto_bitrate(codec: Codec, width: u32, height: u32, fps: u32) -> u32 {
     let compression_factor = match codec {
         Codec::Hevc => 20, // HEVC encodes ~20× more efficiently than raw pixel throughput
         Codec::H264 => 15, // H.264 encodes ~15× more efficiently than raw pixel throughput
@@ -157,7 +157,7 @@ impl EncoderConfig {
     #[must_use]
     pub fn resolved_bitrate(&self) -> u32 {
         self.bitrate
-            .resolve(&self.codec, self.width, self.height, self.fps)
+            .resolve(self.codec, self.width, self.height, self.fps)
     }
 }
 
@@ -366,21 +366,21 @@ mod tests {
     #[test]
     fn test_bitrate_auto_clamped_to_minimum_for_tiny_frame() {
         // Tiny 4x4 frame should still hit the 1 Mbps floor
-        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 4, 4, 30);
+        let bps = Bitrate::Auto.resolve(Codec::Hevc, 4, 4, 30);
         assert_eq!(bps, 1_000_000);
     }
 
     #[test]
     fn test_bitrate_auto_clamped_to_maximum_for_huge_frame() {
         // Massive resolution should be capped at 100 Mbps
-        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 15360, 8640, 240);
+        let bps = Bitrate::Auto.resolve(Codec::Hevc, 15360, 8640, 240);
         assert_eq!(bps, 100_000_000);
     }
 
     #[test]
     fn test_bitrate_mbps_converts_correctly() {
         assert_eq!(
-            Bitrate::Mbps(20).resolve(&Codec::Hevc, 1920, 1080, 60),
+            Bitrate::Mbps(20).resolve(Codec::Hevc, 1920, 1080, 60),
             20_000_000
         );
     }
@@ -388,15 +388,15 @@ mod tests {
     #[test]
     fn test_bitrate_mbps_saturates_on_overflow() {
         // Very large Mbps value must not panic
-        let bps = Bitrate::Mbps(u32::MAX).resolve(&Codec::Hevc, 1920, 1080, 60);
+        let bps = Bitrate::Mbps(u32::MAX).resolve(Codec::Hevc, 1920, 1080, 60);
         assert!(bps > 0);
     }
 
     #[test]
     fn test_bitrate_auto_h264_higher_than_hevc() {
         // H.264 should require higher bitrate than HEVC for same resolution
-        let hevc_bps = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60);
-        let h264_bps = Bitrate::Auto.resolve(&Codec::H264, 1920, 1080, 60);
+        let hevc_bps = Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 60);
+        let h264_bps = Bitrate::Auto.resolve(Codec::H264, 1920, 1080, 60);
         assert!(
             h264_bps > hevc_bps,
             "H.264 bitrate should exceed HEVC bitrate"
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn test_bitrate_auto_h264_720p30_calculation() {
         // Test specific H.264 calculation for 720p30
-        let bps = Bitrate::Auto.resolve(&Codec::H264, 1280, 720, 30);
+        let bps = Bitrate::Auto.resolve(Codec::H264, 1280, 720, 30);
         let expected = 1280 * 720 * 30 / 15; // H.264 compression factor is 15
         assert_eq!(bps, expected);
     }
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn test_bitrate_auto_hevc_720p30_calculation() {
         // Test specific HEVC calculation for 720p30
-        let bps = Bitrate::Auto.resolve(&Codec::Hevc, 1280, 720, 30);
+        let bps = Bitrate::Auto.resolve(Codec::Hevc, 1280, 720, 30);
         let expected = 1280 * 720 * 30 / 20; // HEVC compression factor is 20
         assert_eq!(bps, expected);
     }
@@ -541,8 +541,8 @@ mod tests {
 
     #[test]
     fn test_auto_bitrate_scales_with_fps() {
-        let bps_60 = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 60);
-        let bps_30 = Bitrate::Auto.resolve(&Codec::Hevc, 1920, 1080, 30);
+        let bps_60 = Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 60);
+        let bps_30 = Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 30);
         assert!(bps_60 > bps_30, "60fps bitrate should exceed 30fps");
     }
 
