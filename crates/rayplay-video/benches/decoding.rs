@@ -153,10 +153,8 @@ fn bench_ffmpeg_decode(c: &mut Criterion) {
             let pixels = (w as usize) * (h as usize) * 4;
             group.throughput(Throughput::Bytes(pixels as u64));
             group.bench_with_input(BenchmarkId::new("decode", label), &packet, |b, packet| {
-                b.iter(|| {
-                    let mut decoder = FfmpegDecoder::new(codec).expect("FfmpegDecoder");
-                    std::hint::black_box(decoder.decode(packet))
-                });
+                let mut decoder = FfmpegDecoder::new(codec).expect("FfmpegDecoder");
+                b.iter(|| std::hint::black_box(decoder.decode(packet)));
             });
         }
     }

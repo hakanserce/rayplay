@@ -43,7 +43,7 @@ impl FfmpegEncoder {
     /// Returns [`VideoError::InvalidDimensions`] if width or height is odd,
     /// or [`VideoError::EncodingFailed`] if the FFmpeg encoder cannot be opened.
     pub fn new(config: EncoderConfig) -> Result<Self, VideoError> {
-        if config.width % 2 != 0 || config.height % 2 != 0 {
+        if !config.width.is_multiple_of(2) || !config.height.is_multiple_of(2) {
             return Err(VideoError::InvalidDimensions {
                 width: config.width,
                 height: config.height,
