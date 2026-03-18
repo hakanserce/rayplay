@@ -35,9 +35,7 @@ impl OpenH264Decoder {
     /// or [`VideoError::DecodingFailed`] if the decoder cannot be initialized.
     pub fn new(codec: Codec) -> Result<Self, VideoError> {
         if codec != Codec::H264 {
-            return Err(VideoError::UnsupportedCodec {
-                codec: codec.clone(),
-            });
+            return Err(VideoError::UnsupportedCodec { codec });
         }
 
         let api = openh264::OpenH264API::from_source();
@@ -127,7 +125,7 @@ impl VideoDecoder for OpenH264Decoder {
     }
 
     fn codec(&self) -> Codec {
-        self.codec.clone()
+        self.codec
     }
 }
 

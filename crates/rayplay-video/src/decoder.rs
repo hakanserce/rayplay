@@ -34,12 +34,17 @@ pub fn create_decoder(
 }
 
 fn create_software_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError> {
-    #[cfg(feature = "fallback")]
+    #[cfg(feature = "ffmpeg-fallback")]
+    {
+        use crate::ffmpeg_dec::FfmpegDecoder;
+        FfmpegDecoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+    }
+    #[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
     {
         use crate::openh264_dec::OpenH264Decoder;
         OpenH264Decoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
     }
-    #[cfg(not(feature = "fallback"))]
+    #[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
     {
         let _ = codec;
         Err(VideoError::UnsupportedPlatform)
@@ -116,13 +121,17 @@ mod tests {
         }
 
         fn codec(&self) -> Codec {
-            self.codec.clone()
+            self.codec
         }
     }
 
     // ── create_decoder factory ─────────────────────────────────────────────────
 
-    #[cfg(all(not(target_os = "macos"), feature = "fallback"))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        feature = "fallback",
+        not(feature = "ffmpeg-fallback")
+    ))]
     #[test]
     fn test_create_decoder_auto_returns_openh264_on_non_macos_with_fallback() {
         let result = create_decoder(Codec::H264, PipelineMode::Auto);
@@ -133,7 +142,11 @@ mod tests {
         assert!(matches!(result, Err(VideoError::UnsupportedCodec { .. })));
     }
 
-    #[cfg(all(not(target_os = "macos"), not(feature = "fallback")))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(feature = "fallback"),
+        not(feature = "ffmpeg-fallback")
+    ))]
     #[test]
     fn test_create_decoder_auto_unsupported_on_non_macos_without_fallback() {
         let result = create_decoder(Codec::Hevc, PipelineMode::Auto);
@@ -157,7 +170,7 @@ mod tests {
 
     // ── Software mode ─────────────────────────────────────────────────────────
 
-    #[cfg(feature = "fallback")]
+    #[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
     #[test]
     fn test_create_decoder_software_returns_openh264() {
         let result = create_decoder(Codec::H264, PipelineMode::Software);
@@ -165,18 +178,46 @@ mod tests {
         assert_eq!(result.unwrap().codec(), Codec::H264);
     }
 
-    #[cfg(feature = "fallback")]
+    #[cfg(all(feature = "fallback", not(feature = "ffmpeg-fallback")))]
     #[test]
     fn test_create_decoder_software_rejects_hevc() {
         let result = create_decoder(Codec::Hevc, PipelineMode::Software);
         assert!(matches!(result, Err(VideoError::UnsupportedCodec { .. })));
     }
 
-    #[cfg(not(feature = "fallback"))]
+    #[cfg(not(any(feature = "fallback", feature = "ffmpeg-fallback")))]
     #[test]
     fn test_create_decoder_software_unsupported_without_fallback() {
         let result = create_decoder(Codec::H264, PipelineMode::Software);
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
+    }
+
+    #[cfg(feature = "ffmpeg-fallback")]
+    #[test]
+    fn test_create_decoder_software_returns_ffmpeg_h264() {
+        let result = create_decoder(Codec::H264, PipelineMode::Software);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::H264);
+    }
+
+    #[cfg(feature = "ffmpeg-fallback")]
+    #[test]
+    fn test_create_decoder_software_returns_ffmpeg_hevc() {
+        let result = create_decoder(Codec::Hevc, PipelineMode::Software);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::Hevc);
+    }
+
+    #[cfg(all(not(target_os = "macos"), feature = "ffmpeg-fallback"))]
+    #[test]
+    fn test_create_decoder_auto_returns_ffmpeg_on_non_macos() {
+        let result = create_decoder(Codec::H264, PipelineMode::Auto);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::H264);
+
+        let result = create_decoder(Codec::Hevc, PipelineMode::Auto);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().codec(), Codec::Hevc);
     }
 
     // ── VideoDecoder trait contract ────────────────────────────────────────────

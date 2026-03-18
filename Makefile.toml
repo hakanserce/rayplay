@@ -74,7 +74,11 @@ command = "cargo"
 #   test_helper.rs   — shared test doubles (NullDecoder trait stubs, loopback
 #     helper).  Required trait methods (flush, codec) are never called by the
 #     tests themselves; testing test helpers with more tests adds no value.
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs"]
+#   ffmpeg_enc.rs, ffmpeg_dec.rs — FFmpeg files are excluded because the
+#     ffmpeg-fallback feature is not enabled in the default cargo make ci
+#     pipeline.  These files are compiled and tested in the dedicated
+#     ffmpeg-check CI job.
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "99", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs"]
 
 # ─── Benchmarks ────────────────────────────────────────────────────────────────
 

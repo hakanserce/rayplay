@@ -40,6 +40,11 @@ pub mod openh264_enc;
 #[cfg(feature = "fallback")]
 pub(crate) mod scrap_capture;
 
+#[cfg(feature = "ffmpeg-fallback")]
+pub mod ffmpeg_dec;
+#[cfg(feature = "ffmpeg-fallback")]
+pub mod ffmpeg_enc;
+
 #[cfg(target_os = "windows")]
 pub mod d3d11_device;
 #[cfg(target_os = "windows")]
@@ -74,3 +79,8 @@ pub use videotoolbox::VtDecoder;
 pub use openh264_dec::OpenH264Decoder;
 #[cfg(feature = "fallback")]
 pub use openh264_enc::OpenH264Encoder;
+
+#[cfg(feature = "ffmpeg-fallback")]
+pub use ffmpeg_dec::FfmpegDecoder;
+#[cfg(feature = "ffmpeg-fallback")]
+pub use ffmpeg_enc::FfmpegEncoder;

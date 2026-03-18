@@ -2066,6 +2066,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "ffmpeg-next",
+ "libc",
  "metal",
  "objc",
  "openh264",
