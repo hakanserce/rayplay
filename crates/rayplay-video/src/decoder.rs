@@ -21,8 +21,16 @@ pub fn create_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>, VideoError>
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = codec;
-        Err(VideoError::UnsupportedPlatform)
+        #[cfg(feature = "fallback")]
+        {
+            use crate::openh264_dec::OpenH264Decoder;
+            OpenH264Decoder::new(codec).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+        }
+        #[cfg(not(feature = "fallback"))]
+        {
+            let _ = codec;
+            Err(VideoError::UnsupportedPlatform)
+        }
     }
 }
 

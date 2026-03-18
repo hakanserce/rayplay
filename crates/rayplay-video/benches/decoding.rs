@@ -88,10 +88,49 @@ fn bench_expected_data_size(c: &mut Criterion) {
     group.finish();
 }
 
+// ── OpenH264 software decode (fallback feature) ─────────────────────────────
+
+#[cfg(feature = "fallback")]
+fn bench_openh264_decode(c: &mut Criterion) {
+    use rayplay_video::decoder::VideoDecoder;
+    use rayplay_video::encoder::{EncoderInput, VideoEncoder};
+    use rayplay_video::{Codec, EncoderConfig, OpenH264Decoder, OpenH264Encoder, RawFrame};
+
+    let mut group = c.benchmark_group("openh264_decode");
+
+    for (label, w, h) in [("720p", 1280u32, 720u32), ("480p", 640, 480)] {
+        // Encode a frame first to get a valid bitstream for decoding.
+        let config = EncoderConfig::with_codec(w, h, 30, Codec::H264);
+        let mut encoder = OpenH264Encoder::new(config).expect("OpenH264Encoder");
+        let size = (w as usize) * (h as usize) * 4;
+        let frame = RawFrame::new(vec![128u8; size], w, h, w * 4, 0);
+        let packet = encoder
+            .encode(EncoderInput::Cpu(&frame))
+            .expect("encode")
+            .expect("packet");
+
+        let pixels = (w as usize) * (h as usize) * 4;
+        group.throughput(Throughput::Bytes(pixels as u64));
+        group.bench_with_input(BenchmarkId::new("decode", label), &packet, |b, packet| {
+            let mut decoder = OpenH264Decoder::new(Codec::H264).expect("OpenH264Decoder");
+            b.iter(|| std::hint::black_box(decoder.decode(packet)));
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_encoded_packet_construction,
     bench_decoded_frame_cpu_alloc,
     bench_expected_data_size,
 );
+
+#[cfg(feature = "fallback")]
+criterion_group!(fallback_benches, bench_openh264_decode,);
+
+#[cfg(feature = "fallback")]
+criterion_main!(benches, fallback_benches);
+#[cfg(not(feature = "fallback"))]
 criterion_main!(benches);
