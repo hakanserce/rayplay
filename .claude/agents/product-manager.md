@@ -5,6 +5,8 @@ model: claude-sonnet-4-20250514
 tools:
   - Read
   - Write
+  - Grep
+  - Glob
   - Bash(find *)
   - Bash(cat *)
   - Bash(gh issue *)

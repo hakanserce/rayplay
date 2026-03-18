@@ -4,6 +4,8 @@ description: "Senior Rust developer who reviews code for quality, architecture, 
 model: claude-opus-4-20250514
 tools:
   - Read
+  - Grep
+  - Glob
   - Bash(cargo fmt *)
   - Bash(cargo test *)
   - Bash(cargo clippy *)
