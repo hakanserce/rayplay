@@ -206,8 +206,19 @@ pub fn create_encoder(config: EncoderConfig) -> Result<Box<dyn VideoEncoder>, Vi
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = config;
-        Err(VideoError::UnsupportedPlatform)
+        #[cfg(feature = "fallback")]
+        {
+            use crate::openh264_enc::OpenH264Encoder;
+            let fallback_config =
+                EncoderConfig::with_codec(config.width, config.height, config.fps, Codec::H264)
+                    .with_bitrate(config.bitrate);
+            OpenH264Encoder::new(fallback_config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+        }
+        #[cfg(not(feature = "fallback"))]
+        {
+            let _ = config;
+            Err(VideoError::UnsupportedPlatform)
+        }
     }
 }
 
@@ -456,9 +467,18 @@ mod tests {
         assert!(msg.contains("not supported"));
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
     #[test]
-    fn test_create_encoder_unsupported_on_non_windows() {
+    fn test_create_encoder_returns_openh264_on_non_windows_with_fallback() {
+        let result = create_encoder(EncoderConfig::new(1920, 1080, 60));
+        assert!(result.is_ok());
+        // create_encoder forces H264 for the fallback path
+        assert_eq!(result.unwrap().config().codec, Codec::H264);
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
+    #[test]
+    fn test_create_encoder_unsupported_on_non_windows_without_fallback() {
         let result = create_encoder(EncoderConfig::new(1920, 1080, 60));
         assert!(matches!(result, Err(VideoError::UnsupportedPlatform)));
     }

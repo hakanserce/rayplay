@@ -141,6 +141,28 @@ fn bench_nvenc_zero_copy_4k60(c: &mut Criterion) {
     bench_nvenc_zero_copy(c, "nvenc_zero_copy_4k60", 3840, 2160);
 }
 
+// ── OpenH264 software encode (fallback feature) ─────────────────────────────
+
+#[cfg(feature = "fallback")]
+fn bench_openh264_encode(c: &mut Criterion) {
+    use rayplay_video::{EncoderInput, OpenH264Encoder, encoder::VideoEncoder};
+
+    let mut group = c.benchmark_group("openh264_encode");
+
+    for (label, w, h) in [("1080p", 1920u32, 1080u32), ("720p", 1280, 720)] {
+        let pixels = (w as usize) * (h as usize) * 4;
+        group.throughput(Throughput::Bytes(pixels as u64));
+        group.bench_with_input(BenchmarkId::new("encode", label), &(w, h), |b, &(w, h)| {
+            let config = EncoderConfig::with_codec(w, h, 30, Codec::H264);
+            let mut encoder = OpenH264Encoder::new(config).expect("OpenH264Encoder");
+            let frame = make_raw_frame(w, h, 0);
+            b.iter(|| black_box(encoder.encode(EncoderInput::Cpu(&frame))));
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_auto_bitrate,
@@ -148,4 +170,11 @@ criterion_group!(
     bench_raw_frame_alloc,
     bench_bitrate_resolve,
 );
+
+#[cfg(feature = "fallback")]
+criterion_group!(fallback_benches, bench_openh264_encode,);
+
+#[cfg(feature = "fallback")]
+criterion_main!(benches, fallback_benches);
+#[cfg(not(feature = "fallback"))]
 criterion_main!(benches);

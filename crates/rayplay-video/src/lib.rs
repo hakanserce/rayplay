@@ -34,6 +34,10 @@ mod wgpu_surface;
 
 #[cfg(feature = "fallback")]
 pub(crate) mod scrap_capture;
+#[cfg(feature = "fallback")]
+pub mod openh264_dec;
+#[cfg(feature = "fallback")]
+pub mod openh264_enc;
 
 #[cfg(target_os = "windows")]
 pub mod d3d11_device;
@@ -63,3 +67,8 @@ pub use nvenc::NvencEncoder;
 
 #[cfg(target_os = "macos")]
 pub use videotoolbox::VtDecoder;
+
+#[cfg(feature = "fallback")]
+pub use openh264_dec::OpenH264Decoder;
+#[cfg(feature = "fallback")]
+pub use openh264_enc::OpenH264Encoder;
