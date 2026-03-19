@@ -2025,7 +2025,6 @@ name = "rayplay-core"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "rayplay-video",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -2050,7 +2049,7 @@ dependencies = [
  "bytes",
  "criterion",
  "quinn",
- "rayplay-video",
+ "rayplay-core",
  "rcgen",
  "rustls",
  "serde",
@@ -2071,6 +2070,7 @@ dependencies = [
  "objc",
  "openh264",
  "pollster",
+ "rayplay-core",
  "scrap",
  "serde",
  "serde_json",

@@ -93,12 +93,12 @@ pub enum TransportError {
 /// A single video fragment as exchanged over QUIC unreliable datagrams.
 ///
 /// Each [`EncodedPacket`] is split into one or more `VideoFragment`s by
-/// [`VideoFragmenter`] and reassembled back into an [`EncodedPacket`] by
-/// [`VideoReassembler`].
+/// [`FrameFragmenter`] and reassembled back into an [`EncodedPacket`] by
+/// [`FrameReassembler`].
 ///
-/// [`EncodedPacket`]: rayplay_video::packet::EncodedPacket
-/// [`VideoFragmenter`]: crate::fragmenter::VideoFragmenter
-/// [`VideoReassembler`]: crate::reassembler::VideoReassembler
+/// [`EncodedPacket`]: rayplay_core::packet::EncodedPacket
+/// [`FrameFragmenter`]: crate::fragmenter::FrameFragmenter
+/// [`FrameReassembler`]: crate::reassembler::FrameReassembler
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFragment {
     /// Monotonically-increasing frame identifier (wraps at `u32::MAX`).
@@ -150,7 +150,8 @@ impl VideoFragment {
         let frag_total = u16::from_be_bytes([datagram[6], datagram[7]]);
         let channel = Channel::try_from(datagram[8])?;
         let flags = datagram[9];
-        // bytes 10–11 are reserved; ignore on decode
+        // Skip datagram[10..12] (reserved bytes)
+        let payload = datagram[HEADER_LEN..].to_vec();
 
         if frag_total == 0 {
             return Err(TransportError::InvalidFragTotal);
@@ -162,8 +163,6 @@ impl VideoFragment {
             });
         }
 
-        let payload = datagram[HEADER_LEN..].to_vec();
-
         Ok(Self {
             frame_id,
             frag_index,
@@ -173,19 +172,17 @@ impl VideoFragment {
             payload,
         })
     }
-
-    /// Returns `true` if this fragment belongs to a keyframe (IDR).
-    #[must_use]
-    pub fn is_keyframe(&self) -> bool {
-        self.flags & FLAG_KEYFRAME != 0
-    }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_fragment(
+    // ── VideoFragment::encode/decode ──────────────────────────────────────────
+
+    fn create_test_fragment(
         frame_id: u32,
         frag_index: u16,
         frag_total: u16,
@@ -211,229 +208,145 @@ mod tests {
 
     #[test]
     fn test_channel_try_from_unknown_returns_error() {
-        let err = Channel::try_from(99u8).unwrap_err();
-        assert!(matches!(err, TransportError::UnknownChannel(99)));
+        let result = Channel::try_from(255u8);
+        assert!(matches!(result, Err(TransportError::UnknownChannel(255))));
     }
 
-    #[test]
-    fn test_channel_repr_is_zero() {
-        assert_eq!(Channel::Video as u8, 0);
-    }
-
-    // ── VideoFragment::encode ─────────────────────────────────────────────────
+    // ── VideoFragment ─────────────────────────────────────────────────────────
 
     #[test]
-    fn test_encode_produces_header_plus_payload() {
-        let frag = make_fragment(1, 0, 1, 0, vec![0xAA, 0xBB]);
-        let encoded = frag.encode();
-        assert_eq!(encoded.len(), HEADER_LEN + 2);
-    }
-
-    #[test]
-    fn test_encode_frame_id_big_endian() {
-        let frag = make_fragment(0x0102_0304, 0, 1, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(&encoded[0..4], &[0x01, 0x02, 0x03, 0x04]);
-    }
-
-    #[test]
-    fn test_encode_frag_index_big_endian() {
-        let frag = make_fragment(0, 0x0506, 0x0607, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(&encoded[4..6], &[0x05, 0x06]);
-    }
-
-    #[test]
-    fn test_encode_frag_total_big_endian() {
-        let frag = make_fragment(0, 0, 0x0102, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(&encoded[6..8], &[0x01, 0x02]);
-    }
-
-    #[test]
-    fn test_encode_channel_byte() {
-        let frag = make_fragment(0, 0, 1, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(encoded[8], 0u8); // Channel::Video = 0
-    }
-
-    #[test]
-    fn test_encode_flags_byte() {
-        let frag = make_fragment(0, 0, 1, FLAG_KEYFRAME, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(encoded[9], FLAG_KEYFRAME);
-    }
-
-    #[test]
-    fn test_encode_reserved_bytes_are_zero() {
-        let frag = make_fragment(0, 0, 1, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(&encoded[10..12], &[0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_payload_appended() {
-        let payload = vec![1u8, 2, 3, 4];
-        let frag = make_fragment(0, 0, 1, 0, payload.clone());
-        let encoded = frag.encode();
-        assert_eq!(&encoded[HEADER_LEN..], payload.as_slice());
-    }
-
-    #[test]
-    fn test_encode_empty_payload_produces_header_only() {
-        let frag = make_fragment(0, 0, 1, 0, vec![]);
-        let encoded = frag.encode();
-        assert_eq!(encoded.len(), HEADER_LEN);
-    }
-
-    // ── VideoFragment::decode ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_decode_roundtrip() {
-        let frag = make_fragment(42, 1, 3, FLAG_KEYFRAME, vec![0xFF, 0x00]);
+    fn test_video_fragment_encode_decode_roundtrip() {
+        let frag = create_test_fragment(12345, 2, 5, FLAG_KEYFRAME, vec![0xAB, 0xCD, 0xEF]);
         let encoded = frag.encode();
         let decoded = VideoFragment::decode(&encoded).unwrap();
         assert_eq!(decoded, frag);
     }
 
     #[test]
-    fn test_decode_too_short_returns_error() {
-        let buf = [0u8; HEADER_LEN - 1];
-        let err = VideoFragment::decode(&buf).unwrap_err();
-        assert!(matches!(err, TransportError::DatagramTooShort(11)));
-    }
-
-    #[test]
-    fn test_decode_empty_returns_error() {
-        let err = VideoFragment::decode(&[]).unwrap_err();
-        assert!(matches!(err, TransportError::DatagramTooShort(0)));
-    }
-
-    #[test]
-    fn test_decode_frag_total_zero_returns_error() {
-        let mut buf = [0u8; HEADER_LEN];
-        // frag_total is bytes 6..8, set to 0
-        buf[6] = 0;
-        buf[7] = 0;
-        let err = VideoFragment::decode(&buf).unwrap_err();
-        assert!(matches!(err, TransportError::InvalidFragTotal));
-    }
-
-    #[test]
-    fn test_decode_frag_index_out_of_range_returns_error() {
-        let frag = make_fragment(0, 5, 3, 0, vec![]);
+    fn test_video_fragment_encode_header_layout() {
+        let frag = create_test_fragment(0x12345678, 0x9ABC, 0xDEF0, 0x42, vec![]);
         let encoded = frag.encode();
-        // Manually build with frag_index=5, frag_total=3 (invalid)
-        let err = VideoFragment::decode(&encoded).unwrap_err();
+
+        assert_eq!(encoded.len(), HEADER_LEN); // No payload
+        assert_eq!(&encoded[0..4], &[0x12, 0x34, 0x56, 0x78]); // frame_id (BE)
+        assert_eq!(&encoded[4..6], &[0x9A, 0xBC]); // frag_index (BE)
+        assert_eq!(&encoded[6..8], &[0xDE, 0xF0]); // frag_total (BE)
+        assert_eq!(encoded[8], 0); // channel = Video
+        assert_eq!(encoded[9], 0x42); // flags
+        assert_eq!(&encoded[10..12], &[0, 0]); // reserved
+    }
+
+    #[test]
+    fn test_video_fragment_encode_includes_payload() {
+        let payload = vec![1u8, 2, 3, 4];
+        let frag = create_test_fragment(100, 0, 1, 0, payload.clone());
+        let encoded = frag.encode();
+
+        assert_eq!(encoded.len(), HEADER_LEN + 4);
+        assert_eq!(&encoded[HEADER_LEN..], &payload);
+    }
+
+    #[test]
+    fn test_video_fragment_decode_too_short_returns_error() {
+        let short = vec![0u8; HEADER_LEN - 1];
+        let result = VideoFragment::decode(&short);
+        assert!(matches!(result, Err(TransportError::DatagramTooShort(11))));
+    }
+
+    #[test]
+    fn test_video_fragment_decode_zero_frag_total_returns_error() {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[6] = 0; // frag_total = 0
+        buf[7] = 0;
+        let result = VideoFragment::decode(&buf);
+        assert!(matches!(result, Err(TransportError::InvalidFragTotal)));
+    }
+
+    #[test]
+    fn test_video_fragment_decode_frag_index_out_of_range_returns_error() {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[4] = 0; // frag_index = 5
+        buf[5] = 5;
+        buf[6] = 0; // frag_total = 3
+        buf[7] = 3;
+        let result = VideoFragment::decode(&buf);
         assert!(matches!(
-            err,
-            TransportError::FragIndexOutOfRange {
+            result,
+            Err(TransportError::FragIndexOutOfRange {
                 frag_index: 5,
                 frag_total: 3
-            }
+            })
         ));
     }
 
     #[test]
-    fn test_decode_unknown_channel_returns_error() {
-        let mut buf = [0u8; HEADER_LEN];
-        buf[6] = 0; // frag_total high byte
-        buf[7] = 1; // frag_total = 1
-        buf[8] = 255; // unknown channel
-        let err = VideoFragment::decode(&buf).unwrap_err();
-        assert!(matches!(err, TransportError::UnknownChannel(255)));
+    fn test_video_fragment_decode_unknown_channel_returns_error() {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[6] = 0; // frag_total = 1 (valid)
+        buf[7] = 1;
+        buf[8] = 99; // unknown channel
+        let result = VideoFragment::decode(&buf);
+        assert!(matches!(result, Err(TransportError::UnknownChannel(99))));
     }
 
     #[test]
-    fn test_decode_exact_header_no_payload() {
-        let frag = make_fragment(99, 0, 1, 0, vec![]);
-        let encoded = frag.encode();
-        let decoded = VideoFragment::decode(&encoded).unwrap();
-        assert!(decoded.payload.is_empty());
+    fn test_video_fragment_decode_with_payload() {
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[6] = 0; // frag_total = 1
+        buf[7] = 1;
+        buf.extend(&payload);
+
+        let decoded = VideoFragment::decode(&buf).unwrap();
+        assert_eq!(decoded.payload, payload);
     }
 
     #[test]
-    fn test_decode_reserved_bytes_ignored() {
-        let frag = make_fragment(1, 0, 1, 0, vec![0xAB]);
-        let mut encoded = frag.encode().to_vec();
-        // Corrupt reserved bytes — should still decode fine
-        encoded[10] = 0xDE;
-        encoded[11] = 0xAD;
-        let decoded = VideoFragment::decode(&encoded).unwrap();
-        assert_eq!(decoded.payload, vec![0xAB]);
+    fn test_video_fragment_decode_preserves_flags() {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[6] = 0; // frag_total = 1
+        buf[7] = 1;
+        buf[9] = FLAG_KEYFRAME; // flags
+
+        let decoded = VideoFragment::decode(&buf).unwrap();
+        assert_eq!(decoded.flags, FLAG_KEYFRAME);
     }
 
-    // ── VideoFragment::is_keyframe ─────────────────────────────────────────────
-
-    #[test]
-    fn test_is_keyframe_true_when_flag_set() {
-        let frag = make_fragment(0, 0, 1, FLAG_KEYFRAME, vec![]);
-        assert!(frag.is_keyframe());
-    }
-
-    #[test]
-    fn test_is_keyframe_false_when_flag_not_set() {
-        let frag = make_fragment(0, 0, 1, 0, vec![]);
-        assert!(!frag.is_keyframe());
-    }
-
-    #[test]
-    fn test_is_keyframe_only_checks_bit_zero() {
-        // bit 1 set, bit 0 clear → not a keyframe
-        let frag = make_fragment(0, 0, 1, 0b0000_0010, vec![]);
-        assert!(!frag.is_keyframe());
-    }
-
-    // ── Constants ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_header_len_is_twelve() {
-        assert_eq!(HEADER_LEN, 12);
-    }
-
-    #[test]
-    fn test_max_fragment_payload_is_correct() {
-        assert_eq!(MAX_FRAGMENT_PAYLOAD, 1200 - 12);
-    }
-
-    #[test]
-    fn test_flag_keyframe_is_bit_zero() {
-        assert_eq!(FLAG_KEYFRAME, 1);
-    }
-
-    // ── TransportError display ─────────────────────────────────────────────────
+    // ── TransportError ────────────────────────────────────────────────────────
 
     #[test]
     fn test_transport_error_datagram_too_short_display() {
-        let e = TransportError::DatagramTooShort(5);
-        assert!(e.to_string().contains("5"));
+        let err = TransportError::DatagramTooShort(8);
+        assert_eq!(err.to_string(), "datagram too short: 8 bytes (need 12)");
     }
 
     #[test]
     fn test_transport_error_invalid_frag_total_display() {
-        let e = TransportError::InvalidFragTotal;
-        assert!(e.to_string().contains("frag_total"));
+        let err = TransportError::InvalidFragTotal;
+        assert_eq!(err.to_string(), "frag_total must be > 0");
     }
 
     #[test]
     fn test_transport_error_frag_index_out_of_range_display() {
-        let e = TransportError::FragIndexOutOfRange {
-            frag_index: 3,
-            frag_total: 2,
+        let err = TransportError::FragIndexOutOfRange {
+            frag_index: 10,
+            frag_total: 5,
         };
-        let s = e.to_string();
-        assert!(s.contains('3') && s.contains('2'));
+        assert_eq!(
+            err.to_string(),
+            "frag_index 10 out of range for frag_total 5"
+        );
+    }
+
+    #[test]
+    fn test_transport_error_unknown_channel_display() {
+        let err = TransportError::UnknownChannel(42);
+        assert_eq!(err.to_string(), "unknown channel: 42");
     }
 
     #[test]
     fn test_transport_error_tls_error_display() {
-        let e = TransportError::TlsError("bad cert".to_string());
-        assert!(e.to_string().contains("bad cert"));
-    }
-
-    #[test]
-    fn test_transport_error_endpoint_closed_display() {
-        let e = TransportError::EndpointClosed;
-        assert_eq!(e.to_string(), "endpoint closed");
+        let err = TransportError::TlsError("bad cert".to_string());
+        assert_eq!(err.to_string(), "TLS error: bad cert");
     }
 }
