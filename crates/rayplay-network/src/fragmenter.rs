@@ -36,11 +36,7 @@ impl FrameFragmenter {
         // Handle empty packets by ensuring at least one fragment
         let total_chunks = std::cmp::max(1, packet.data.len().div_ceil(MAX_FRAGMENT_PAYLOAD));
 
-        let flags = if packet.is_keyframe {
-            FLAG_KEYFRAME
-        } else {
-            0
-        };
+        let flags = if packet.is_keyframe { FLAG_KEYFRAME } else { 0 };
         let data = packet.data.clone(); // Clone to avoid lifetime issues
 
         (0..total_chunks).map(move |chunk_idx| {
