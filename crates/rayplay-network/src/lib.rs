@@ -6,8 +6,8 @@
 //! # Pipeline
 //!
 //! ```text
-//! Host:   EncodedPacket → FrameFragmenter → QUIC datagrams ──UDP──►
-//! Client: ◄──UDP── QUIC datagrams → FrameReassembler → EncodedPacket
+//! Host:   EncodedPacket → VideoFragmenter → QUIC datagrams ──UDP──►
+//! Client: ◄──UDP── QUIC datagrams → VideoReassembler → EncodedPacket
 //! ```
 
 pub mod fragmenter;
@@ -16,8 +16,8 @@ pub mod transport;
 pub(crate) mod transport_tls;
 pub mod wire;
 
-pub use fragmenter::FrameFragmenter;
-pub use reassembler::FrameReassembler;
+pub use fragmenter::VideoFragmenter;
+pub use reassembler::VideoReassembler;
 pub use transport::{QuicListener, QuicVideoTransport};
 pub use wire::{
     Channel, FLAG_KEYFRAME, HEADER_LEN, MAX_FRAGMENT_PAYLOAD, TransportError, VideoFragment,

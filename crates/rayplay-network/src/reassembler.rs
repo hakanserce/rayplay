@@ -9,246 +9,398 @@ use crate::wire::{FLAG_KEYFRAME, VideoFragment};
 /// Maximum number of incomplete frames held in memory simultaneously (ADR-003).
 pub const MAX_IN_FLIGHT_FRAMES: usize = 4;
 
-/// Reassembles fragmented video packets from QUIC datagrams.
-///
-/// Tracks incomplete frames by ID and completes them when all fragments arrive.
-/// Automatically discards stale frames that exceed `MAX_IN_FLIGHT_FRAMES`.
-pub struct FrameReassembler {
-    /// In-progress frame assembly state, keyed by frame ID.
-    incomplete_frames: HashMap<u32, IncompleteFrame>,
-}
-
-/// State for a frame that's being assembled from fragments.
-#[derive(Debug)]
-struct IncompleteFrame {
-    /// Frame metadata (extracted from first fragment).
-    frame_id: u32,
+/// State for a single partially-received frame.
+struct PendingFrame {
+    frag_total: u16,
     is_keyframe: bool,
-    expected_chunks: u16,
-
-    /// Fragment payloads indexed by fragment index.
-    chunks: HashMap<u16, Vec<u8>>,
+    fragments: Vec<Option<Vec<u8>>>,
+    received: u16,
 }
 
-impl FrameReassembler {
-    /// Creates a new reassembler instance.
-    #[must_use]
-    pub fn new() -> Self {
+impl PendingFrame {
+    fn new(frag_total: u16, is_keyframe: bool) -> Self {
         Self {
-            incomplete_frames: HashMap::new(),
+            frag_total,
+            is_keyframe,
+            fragments: vec![None; usize::from(frag_total)],
+            received: 0,
         }
     }
 
-    /// Adds a fragment and returns a completed packet if this was the final fragment.
+    /// Returns `true` if all fragments have been received.
+    fn is_complete(&self) -> bool {
+        self.received == self.frag_total
+    }
+
+    /// Assembles all fragments into a contiguous payload in order.
+    fn assemble(self) -> Vec<u8> {
+        self.fragments.into_iter().flatten().flatten().collect()
+    }
+}
+
+/// Reassembles [`VideoFragment`]s into complete [`EncodedPacket`]s.
+///
+/// Bounded to at most `max_pending` incomplete frames at a time. When a new
+/// `frame_id` arrives and the buffer is full, the oldest incomplete frame is
+/// evicted (dropped) to make room — matching the ADR-003 "drop oldest" policy.
+pub struct VideoReassembler {
+    pending: HashMap<u32, PendingFrame>,
+    max_pending: usize,
+}
+
+impl VideoReassembler {
+    /// Creates a new reassembler with the given maximum number of in-flight frames.
     ///
-    /// Returns `None` if more fragments are needed, or if the fragment is invalid
-    /// (e.g., duplicate fragment index for the same frame).
-    pub fn add_fragment(&mut self, fragment: VideoFragment) -> Option<EncodedPacket> {
-        // Handle memory pressure by evicting old incomplete frames
-        if self.incomplete_frames.len() >= MAX_IN_FLIGHT_FRAMES {
-            let oldest_key = *self.incomplete_frames.keys().min()?;
-            self.incomplete_frames.remove(&oldest_key);
+    /// # Panics
+    ///
+    /// Panics if `max_pending` is zero.
+    #[must_use]
+    pub fn new(max_pending: usize) -> Self {
+        assert!(max_pending > 0, "max_pending must be > 0");
+        Self {
+            pending: HashMap::new(),
+            max_pending,
+        }
+    }
+
+    /// Creates a reassembler using [`MAX_IN_FLIGHT_FRAMES`] (4).
+    #[must_use]
+    pub fn with_default_max() -> Self {
+        Self::new(MAX_IN_FLIGHT_FRAMES)
+    }
+
+    /// Ingests one fragment.
+    ///
+    /// Returns `Some(EncodedPacket)` when all fragments for a frame arrive;
+    /// `None` otherwise.
+    ///
+    /// # Drop / eviction semantics
+    ///
+    /// - When the buffer is full and a fragment for a *new* `frame_id` arrives,
+    ///   the frame with the lowest `frame_id` is evicted.
+    /// - Duplicate fragments (slot already filled) are silently ignored.
+    /// - Fragments whose `frag_index >= existing frag_total` are silently ignored
+    ///   (inconsistent sender — protect against out-of-bounds).
+    pub fn ingest(&mut self, frag: VideoFragment) -> Option<EncodedPacket> {
+        let frame_id = frag.frame_id;
+
+        // If this frame_id isn't yet tracked and we're at capacity, evict oldest.
+        if !self.pending.contains_key(&frame_id) {
+            if self.pending.len() >= self.max_pending {
+                self.evict_oldest();
+            }
+            let is_keyframe = frag.flags & FLAG_KEYFRAME != 0;
+            self.pending
+                .insert(frame_id, PendingFrame::new(frag.frag_total, is_keyframe));
         }
 
-        let frame = self
-            .incomplete_frames
-            .entry(fragment.frame_id)
-            .or_insert_with(|| IncompleteFrame {
-                frame_id: fragment.frame_id,
-                is_keyframe: (fragment.flags & FLAG_KEYFRAME) != 0,
-                expected_chunks: fragment.frag_total,
-                chunks: HashMap::new(),
-            });
+        let entry = self.pending.get_mut(&frame_id)?;
 
-        // Ignore duplicate fragments
-        if frame.chunks.contains_key(&fragment.frag_index) {
+        // Guard against inconsistent frag_index vs the stored frag_total.
+        let idx = usize::from(frag.frag_index);
+        if idx >= entry.fragments.len() {
             return None;
         }
 
-        // Insert the fragment payload
-        frame.chunks.insert(fragment.frag_index, fragment.payload);
+        // Ignore duplicate fragments.
+        if entry.fragments[idx].is_some() {
+            return None;
+        }
 
-        // Check if frame is complete
-        if frame.chunks.len() == frame.expected_chunks as usize {
-            let completed_frame = self.incomplete_frames.remove(&fragment.frame_id)?;
-            Some(Self::reassemble_frame(completed_frame))
+        entry.fragments[idx] = Some(frag.payload);
+        entry.received += 1;
+
+        if entry.is_complete() {
+            let frame = self.pending.remove(&frame_id)?;
+            let is_keyframe = frame.is_keyframe;
+            let data = frame.assemble();
+            Some(EncodedPacket::new(data, is_keyframe, 0, 0))
         } else {
             None
         }
     }
 
-    /// Combines fragment payloads into a single encoded packet.
-    #[allow(clippy::needless_pass_by_value)] // We need to consume the frame to move out its chunks
-    fn reassemble_frame(frame: IncompleteFrame) -> EncodedPacket {
-        let mut payload = Vec::new();
-
-        // Concatenate chunks in fragment index order
-        for seq in 0..frame.expected_chunks {
-            if let Some(chunk_data) = frame.chunks.get(&seq) {
-                payload.extend_from_slice(chunk_data);
-            }
+    /// Evicts all incomplete frames whose `frame_id` is strictly less than
+    /// `before_frame_id`.
+    ///
+    /// Returns the number of frames evicted.
+    pub fn evict_before(&mut self, before_frame_id: u32) -> usize {
+        let keys_to_remove: Vec<u32> = self
+            .pending
+            .keys()
+            .copied()
+            .filter(|&k| k < before_frame_id)
+            .collect();
+        let count = keys_to_remove.len();
+        for k in keys_to_remove {
+            self.pending.remove(&k);
         }
-
-        // Derive timestamp from frame_id for consistency with fragmenter
-        let timestamp_us = u64::from(frame.frame_id);
-        let duration_us = 16_667; // Default 60fps duration
-
-        EncodedPacket::new(payload, frame.is_keyframe, timestamp_us, duration_us)
+        count
     }
 
-    /// Returns the number of incomplete frames currently in memory.
+    /// Returns the number of frames currently buffered (incomplete).
     #[must_use]
-    pub fn in_flight_count(&self) -> usize {
-        self.incomplete_frames.len()
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
     }
 
-    /// Clears all incomplete frames (useful for testing).
-    pub fn clear(&mut self) {
-        self.incomplete_frames.clear();
-    }
-}
-
-impl Default for FrameReassembler {
-    fn default() -> Self {
-        Self::new()
+    /// Evicts the frame with the smallest `frame_id` (oldest in-flight frame).
+    fn evict_oldest(&mut self) {
+        if let Some(&oldest) = self.pending.keys().min() {
+            self.pending.remove(&oldest);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{Channel, VideoFragment};
+    use crate::wire::{Channel, FLAG_KEYFRAME, VideoFragment};
 
-    fn create_test_fragment(
+    fn make_frag(
         frame_id: u32,
         frag_index: u16,
         frag_total: u16,
+        flags: u8,
         payload: Vec<u8>,
     ) -> VideoFragment {
         VideoFragment {
             frame_id,
             frag_index,
             frag_total,
-            flags: 0,
             channel: Channel::Video,
+            flags,
             payload,
         }
     }
 
-    #[test]
-    fn test_reassembler_single_fragment_frame() {
-        let mut reassembler = FrameReassembler::new();
-        let frag = create_test_fragment(100, 0, 1, vec![1, 2, 3]);
+    fn single_frag(frame_id: u32, data: Vec<u8>) -> VideoFragment {
+        make_frag(frame_id, 0, 1, 0, data)
+    }
 
-        let packet = reassembler.add_fragment(frag).expect("should complete");
-        assert_eq!(packet.data, vec![1, 2, 3]);
-        assert_eq!(packet.timestamp_us, 100);
-        assert_eq!(reassembler.in_flight_count(), 0);
+    // ── Constructor ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_new_stores_max_pending() {
+        let r = VideoReassembler::new(8);
+        assert_eq!(r.max_pending, 8);
     }
 
     #[test]
-    fn test_reassembler_multi_fragment_frame() {
-        let mut reassembler = FrameReassembler::new();
-
-        // Add fragments out of order
-        let frag2 = create_test_fragment(200, 1, 3, vec![4, 5, 6]);
-        assert!(reassembler.add_fragment(frag2).is_none());
-        assert_eq!(reassembler.in_flight_count(), 1);
-
-        let frag0 = create_test_fragment(200, 0, 3, vec![1, 2, 3]);
-        assert!(reassembler.add_fragment(frag0).is_none());
-
-        let frag1 = create_test_fragment(200, 2, 3, vec![7, 8]);
-        let packet = reassembler.add_fragment(frag1).expect("should complete");
-
-        assert_eq!(packet.data, vec![1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(reassembler.in_flight_count(), 0);
+    #[should_panic(expected = "max_pending must be > 0")]
+    fn test_new_zero_panics() {
+        let _ = VideoReassembler::new(0);
     }
 
     #[test]
-    fn test_reassembler_ignores_duplicate_fragments() {
-        let mut reassembler = FrameReassembler::new();
-        let frag = create_test_fragment(300, 0, 2, vec![1, 2]);
-
-        // Add same fragment twice
-        assert!(reassembler.add_fragment(frag.clone()).is_none());
-        assert!(reassembler.add_fragment(frag).is_none()); // Should be ignored
-
-        assert_eq!(reassembler.in_flight_count(), 1);
-        let frame_data = &reassembler.incomplete_frames[&300];
-        assert_eq!(frame_data.chunks.len(), 1); // Still only one chunk
+    fn test_with_default_max_uses_constant() {
+        let r = VideoReassembler::with_default_max();
+        assert_eq!(r.max_pending, MAX_IN_FLIGHT_FRAMES);
     }
 
     #[test]
-    fn test_reassembler_memory_pressure_eviction() {
-        let mut reassembler = FrameReassembler::new();
+    fn test_initial_pending_count_is_zero() {
+        let r = VideoReassembler::new(4);
+        assert_eq!(r.pending_count(), 0);
+    }
 
-        // Fill up to capacity
-        for i in 0..MAX_IN_FLIGHT_FRAMES {
-            let frag = create_test_fragment(i as u32, 0, 2, vec![i as u8]);
-            reassembler.add_fragment(frag);
-        }
-        assert_eq!(reassembler.in_flight_count(), MAX_IN_FLIGHT_FRAMES);
+    // ── ingest: single-fragment frames ────────────────────────────────────────
 
-        // Adding one more should evict the oldest (frame 0)
-        let overflow_frag = create_test_fragment(999, 0, 2, vec![99]);
-        reassembler.add_fragment(overflow_frag);
-
-        assert_eq!(reassembler.in_flight_count(), MAX_IN_FLIGHT_FRAMES);
-        assert!(!reassembler.incomplete_frames.contains_key(&0)); // Evicted
-        assert!(reassembler.incomplete_frames.contains_key(&999)); // Present
+    #[test]
+    fn test_ingest_single_fragment_returns_packet() {
+        let mut r = VideoReassembler::new(4);
+        let result = r.ingest(single_frag(0, vec![1, 2, 3]));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().data, vec![1, 2, 3]);
     }
 
     #[test]
-    fn test_reassembler_keyframe_flag_preservation() {
-        let mut reassembler = FrameReassembler::new();
-        let mut keyframe_frag = create_test_fragment(400, 0, 1, vec![0xAB]);
-        keyframe_frag.flags = FLAG_KEYFRAME;
-
-        let packet = reassembler
-            .add_fragment(keyframe_frag)
-            .expect("should complete");
-        assert!(packet.is_keyframe);
+    fn test_ingest_single_fragment_clears_pending() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(single_frag(0, vec![1]));
+        assert_eq!(r.pending_count(), 0);
     }
 
     #[test]
-    fn test_reassembler_clear() {
-        let mut reassembler = FrameReassembler::new();
-        let frag = create_test_fragment(500, 0, 2, vec![1]);
-        reassembler.add_fragment(frag);
-
-        assert_eq!(reassembler.in_flight_count(), 1);
-        reassembler.clear();
-        assert_eq!(reassembler.in_flight_count(), 0);
+    fn test_ingest_keyframe_flag_propagated() {
+        let mut r = VideoReassembler::new(4);
+        let frag = make_frag(0, 0, 1, FLAG_KEYFRAME, vec![0xAA]);
+        let pkt = r.ingest(frag).unwrap();
+        assert!(pkt.is_keyframe);
     }
 
     #[test]
-    fn test_reassembler_default_trait() {
-        let reassembler = FrameReassembler::default();
-        assert_eq!(reassembler.in_flight_count(), 0);
+    fn test_ingest_non_keyframe_flag_not_set() {
+        let mut r = VideoReassembler::new(4);
+        let frag = make_frag(0, 0, 1, 0, vec![0xAA]);
+        let pkt = r.ingest(frag).unwrap();
+        assert!(!pkt.is_keyframe);
+    }
+
+    // ── ingest: multi-fragment frames ─────────────────────────────────────────
+
+    #[test]
+    fn test_ingest_multi_fragment_returns_none_until_complete() {
+        let mut r = VideoReassembler::new(4);
+        assert!(r.ingest(make_frag(0, 0, 3, 0, vec![1])).is_none());
+        assert!(r.ingest(make_frag(0, 1, 3, 0, vec![2])).is_none());
     }
 
     #[test]
-    fn test_reassembler_concurrent_frames() {
-        let mut reassembler = FrameReassembler::new();
+    fn test_ingest_multi_fragment_returns_packet_on_last() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 3, 0, vec![1]));
+        r.ingest(make_frag(0, 1, 3, 0, vec![2]));
+        let pkt = r.ingest(make_frag(0, 2, 3, 0, vec![3])).unwrap();
+        assert_eq!(pkt.data, vec![1, 2, 3]);
+    }
 
-        // Start two different frames
-        let frag_a1 = create_test_fragment(1000, 0, 2, vec![1, 2]);
-        let frag_b1 = create_test_fragment(2000, 0, 2, vec![10, 20]);
-        reassembler.add_fragment(frag_a1);
-        reassembler.add_fragment(frag_b1);
-        assert_eq!(reassembler.in_flight_count(), 2);
+    #[test]
+    fn test_ingest_multi_fragment_out_of_order() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 2, 3, 0, vec![3]));
+        r.ingest(make_frag(0, 0, 3, 0, vec![1]));
+        let pkt = r.ingest(make_frag(0, 1, 3, 0, vec![2])).unwrap();
+        assert_eq!(pkt.data, vec![1, 2, 3]);
+    }
 
-        // Complete frame B first
-        let frag_b2 = create_test_fragment(2000, 1, 2, vec![30]);
-        let packet_b = reassembler.add_fragment(frag_b2).expect("B complete");
-        assert_eq!(packet_b.data, vec![10, 20, 30]);
-        assert_eq!(reassembler.in_flight_count(), 1);
+    #[test]
+    fn test_ingest_multi_fragment_payload_concatenated_in_order() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 1, 3, 0, vec![0xBB]));
+        r.ingest(make_frag(0, 2, 3, 0, vec![0xCC]));
+        let pkt = r.ingest(make_frag(0, 0, 3, 0, vec![0xAA])).unwrap();
+        assert_eq!(pkt.data, vec![0xAA, 0xBB, 0xCC]);
+    }
 
-        // Complete frame A
-        let frag_a2 = create_test_fragment(1000, 1, 2, vec![3]);
-        let packet_a = reassembler.add_fragment(frag_a2).expect("A complete");
-        assert_eq!(packet_a.data, vec![1, 2, 3]);
-        assert_eq!(reassembler.in_flight_count(), 0);
+    // ── ingest: duplicate fragments ───────────────────────────────────────────
+
+    #[test]
+    fn test_ingest_duplicate_fragment_ignored() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 2, 0, vec![1]));
+        // Send frag 0 again — should be ignored
+        assert!(r.ingest(make_frag(0, 0, 2, 0, vec![99])).is_none());
+        // Frame not yet complete (still need frag 1)
+        assert_eq!(r.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_ingest_duplicate_does_not_corrupt_payload() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 2, 0, vec![0xAA]));
+        r.ingest(make_frag(0, 0, 2, 0, vec![0xFF])); // duplicate, ignored
+        let pkt = r.ingest(make_frag(0, 1, 2, 0, vec![0xBB])).unwrap();
+        assert_eq!(pkt.data, vec![0xAA, 0xBB]);
+    }
+
+    // ── ingest: inconsistent frag_index ───────────────────────────────────────
+
+    #[test]
+    fn test_ingest_frag_index_out_of_range_ignored() {
+        let mut r = VideoReassembler::new(4);
+        // frag_total=2 but frag_index=5 for this fragment
+        r.ingest(make_frag(0, 0, 2, 0, vec![1]));
+        // Second fragment has inconsistent frag_index >= stored frag_total
+        let bad = VideoFragment {
+            frame_id: 0,
+            frag_index: 5,
+            frag_total: 2,
+            channel: Channel::Video,
+            flags: 0,
+            payload: vec![99],
+        };
+        assert!(r.ingest(bad).is_none());
+        assert_eq!(r.pending_count(), 1);
+    }
+
+    // ── ingest: eviction when at capacity ─────────────────────────────────────
+
+    #[test]
+    fn test_ingest_evicts_oldest_when_at_capacity() {
+        let mut r = VideoReassembler::new(2);
+        // Fill to capacity with frames 0 and 1 (both incomplete: frag_total=2)
+        r.ingest(make_frag(0, 0, 2, 0, vec![1]));
+        r.ingest(make_frag(1, 0, 2, 0, vec![2]));
+        assert_eq!(r.pending_count(), 2);
+        // New frame 2 arrives — frame 0 (oldest) should be evicted
+        r.ingest(make_frag(2, 0, 2, 0, vec![3]));
+        assert_eq!(r.pending_count(), 2);
+        assert!(!r.pending.contains_key(&0));
+        assert!(r.pending.contains_key(&1));
+        assert!(r.pending.contains_key(&2));
+    }
+
+    // ── evict_before ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_evict_before_removes_older_frames() {
+        let mut r = VideoReassembler::new(10);
+        r.ingest(make_frag(0, 0, 2, 0, vec![]));
+        r.ingest(make_frag(1, 0, 2, 0, vec![]));
+        r.ingest(make_frag(5, 0, 2, 0, vec![]));
+        let evicted = r.evict_before(5);
+        assert_eq!(evicted, 2);
+        assert_eq!(r.pending_count(), 1);
+        assert!(r.pending.contains_key(&5));
+    }
+
+    #[test]
+    fn test_evict_before_zero_evicts_nothing() {
+        let mut r = VideoReassembler::new(10);
+        r.ingest(make_frag(0, 0, 2, 0, vec![]));
+        let evicted = r.evict_before(0);
+        assert_eq!(evicted, 0);
+        assert_eq!(r.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_evict_before_all_evicts_everything() {
+        let mut r = VideoReassembler::new(10);
+        r.ingest(make_frag(0, 0, 2, 0, vec![]));
+        r.ingest(make_frag(1, 0, 2, 0, vec![]));
+        r.ingest(make_frag(2, 0, 2, 0, vec![]));
+        let evicted = r.evict_before(100);
+        assert_eq!(evicted, 3);
+        assert_eq!(r.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_evict_before_empty_reassembler() {
+        let mut r = VideoReassembler::new(4);
+        assert_eq!(r.evict_before(10), 0);
+    }
+
+    // ── pending_count ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pending_count_increases_on_new_frame() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 2, 0, vec![]));
+        assert_eq!(r.pending_count(), 1);
+        r.ingest(make_frag(1, 0, 2, 0, vec![]));
+        assert_eq!(r.pending_count(), 2);
+    }
+
+    #[test]
+    fn test_pending_count_decreases_on_complete_frame() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 2, 0, vec![]));
+        assert_eq!(r.pending_count(), 1);
+        r.ingest(make_frag(0, 1, 2, 0, vec![])); // completes frame 0
+        assert_eq!(r.pending_count(), 0);
+    }
+
+    // ── multiple concurrent frames ────────────────────────────────────────────
+
+    #[test]
+    fn test_multiple_interleaved_frames_reassemble_correctly() {
+        let mut r = VideoReassembler::new(4);
+        r.ingest(make_frag(0, 0, 2, 0, vec![0xA0]));
+        r.ingest(make_frag(1, 0, 2, 0, vec![0xB0]));
+        let p0 = r.ingest(make_frag(0, 1, 2, 0, vec![0xA1])).unwrap();
+        let p1 = r.ingest(make_frag(1, 1, 2, 0, vec![0xB1])).unwrap();
+        assert_eq!(p0.data, vec![0xA0, 0xA1]);
+        assert_eq!(p1.data, vec![0xB0, 0xB1]);
     }
 }

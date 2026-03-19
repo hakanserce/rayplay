@@ -87,14 +87,13 @@ input goes directly to the host. Target latency similar to USB passthrough (Virt
 
 ## Quality Gates (MUST pass before every commit)
 
-1. cargo fmt --all — code must be formatted
-2. cargo clippy --workspace -- -W clippy::pedantic — zero warnings
-3. cargo test --workspace — all tests must pass
-4. cargo llvm-cov --workspace --fail-under-lines 99 — coverage ≥99%
-5. Benchmark tests for performance-critical code (criterion)
+Run `cargo make lint-test-coverage`. If it exits 0, all gates pass:
+- clippy --pedantic (zero warnings)
+- all tests pass
+- code coverage ≥99% (with platform exclusions applied)
 
-Do NOT skip these. If coverage drops below 99%, add unit tests to fill the gap
-before committing.
+Do NOT skip this. If it fails, fix the issue before committing.
+Do NOT inspect raw coverage tables or percentages — trust the exit code.
 
 ## Testing Standards
 - Unit tests for every public function and struct

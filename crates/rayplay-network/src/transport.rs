@@ -28,8 +28,8 @@ use rustls::pki_types::CertificateDer;
 use rayplay_core::packet::EncodedPacket;
 
 use crate::{
-    fragmenter::FrameFragmenter,
-    reassembler::FrameReassembler,
+    fragmenter::VideoFragmenter,
+    reassembler::{MAX_IN_FLIGHT_FRAMES, VideoReassembler},
     transport_tls::{make_client_config, make_server_config},
     wire::{TransportError, VideoFragment},
 };
@@ -86,8 +86,8 @@ impl QuicListener {
 /// RFC 9221 unreliable datagrams.
 pub struct QuicVideoTransport {
     connection: Connection,
-    pub(crate) fragmenter: FrameFragmenter,
-    reassembler: FrameReassembler,
+    pub(crate) fragmenter: VideoFragmenter,
+    reassembler: VideoReassembler,
 }
 
 impl QuicVideoTransport {
@@ -137,8 +137,8 @@ impl QuicVideoTransport {
     pub(crate) fn from_connection(connection: Connection) -> Self {
         Self {
             connection,
-            fragmenter: FrameFragmenter::new(),
-            reassembler: FrameReassembler::new(),
+            fragmenter: VideoFragmenter::with_default_payload(),
+            reassembler: VideoReassembler::with_default_max(),
         }
     }
 
@@ -155,9 +155,8 @@ impl QuicVideoTransport {
     // and compatible with the `NetworkTransport` trait's async contract.
     #[allow(clippy::unused_async)]
     pub async fn send_video(&mut self, packet: &EncodedPacket) -> Result<usize, TransportError> {
-        let frags: Vec<_> = self.fragmenter.fragment(packet).collect();
+        let frags = self.fragmenter.fragment(packet);
         let count = frags.len();
-
         for frag in frags {
             self.connection.send_datagram(frag.encode())?;
         }
@@ -178,7 +177,14 @@ impl QuicVideoTransport {
             let datagram = self.connection.read_datagram().await?;
             let frag = VideoFragment::decode(&datagram)?;
 
-            if let Some(packet) = self.reassembler.add_fragment(frag) {
+            // Evict frames outside the sliding window to bound memory.
+            #[allow(clippy::cast_possible_truncation)]
+            let window = MAX_IN_FLIGHT_FRAMES as u32;
+            if frag.frame_id >= window {
+                self.reassembler.evict_before(frag.frame_id - window);
+            }
+
+            if let Some(packet) = self.reassembler.ingest(frag) {
                 return Ok(packet);
             }
         }
@@ -238,7 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_empty_packet_returns_one_fragment() {
+    async fn test_send_empty_packet_returns_zero_fragments() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
         let server_addr = listener.local_addr().unwrap();
@@ -251,7 +257,32 @@ mod tests {
             .send_video(&EncodedPacket::new(vec![], false, 0, 0))
             .await
             .expect("send_video");
-        assert_eq!(count, 1); // Empty packet still produces one fragment
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_multi_fragment() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move { listener.accept().await.expect("accept") });
+        let mut client = QuicVideoTransport::connect(server_addr, cert_der)
+            .await
+            .expect("connect");
+        let mut server = server_task.await.expect("server task");
+
+        // Use a tiny fragmenter to force 3 fragments for 12 bytes of data.
+        client.fragmenter = VideoFragmenter::new(4);
+        let data: Vec<u8> = (0u8..12).collect();
+        let sent = client
+            .send_video(&EncodedPacket::new(data.clone(), false, 0, 0))
+            .await
+            .expect("send");
+        assert_eq!(sent, 3);
+
+        let received = server.recv_video().await.expect("recv");
+        assert_eq!(received.data, data);
     }
 
     #[tokio::test]
@@ -410,8 +441,9 @@ mod tests {
         let client = QuicVideoTransport::connect(server_addr, cert_der)
             .await
             .expect("connect");
-        // Note: After refactoring, FrameFragmenter doesn't have a max_payload() method,
-        // so we'll just verify that the transport was created successfully.
-        assert_eq!(client.reassembler.in_flight_count(), 0);
+        assert_eq!(
+            client.fragmenter.max_payload(),
+            crate::wire::MAX_FRAGMENT_PAYLOAD,
+        );
     }
 }
