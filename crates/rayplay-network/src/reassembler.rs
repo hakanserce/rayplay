@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use rayplay_video::packet::EncodedPacket;
+use rayplay_core::packet::EncodedPacket;
 
 use crate::wire::{FLAG_KEYFRAME, VideoFragment};
 

@@ -1,6 +1,6 @@
 //! Splits [`EncodedPacket`]s into [`VideoFragment`]s for QUIC datagram transport.
 
-use rayplay_video::packet::EncodedPacket;
+use rayplay_core::packet::EncodedPacket;
 
 use crate::wire::{Channel, FLAG_KEYFRAME, MAX_FRAGMENT_PAYLOAD, VideoFragment};
 
@@ -102,7 +102,7 @@ impl VideoFragmenter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rayplay_video::packet::EncodedPacket;
+    use rayplay_core::packet::EncodedPacket;
 
     fn make_packet(size: usize, is_keyframe: bool) -> EncodedPacket {
         EncodedPacket::new(vec![0xABu8; size], is_keyframe, 0, 16_667)

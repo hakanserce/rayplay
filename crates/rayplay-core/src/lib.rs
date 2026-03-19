@@ -1,6 +1,12 @@
 //! Core streaming logic and shared traits for `RayPlay`.
 
-use rayplay_video::packet::EncodedPacket;
+pub mod frame;
+pub mod packet;
+
+pub use frame::RawFrame;
+pub use packet::EncodedPacket;
+
+use std::future::Future;
 use thiserror::Error;
 
 /// Errors produced by the network transport layer.
@@ -35,7 +41,7 @@ pub trait NetworkTransport: Send {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rayplay_video::packet::EncodedPacket;
+    use crate::packet::EncodedPacket;
     use std::collections::VecDeque;
 
     /// A mock transport used to verify the `NetworkTransport` trait contract.

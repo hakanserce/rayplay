@@ -5,7 +5,7 @@ use rayplay_network::{
     FLAG_KEYFRAME, MAX_FRAGMENT_PAYLOAD, VideoFragment, VideoFragmenter, VideoReassembler,
     wire::Channel,
 };
-use rayplay_video::packet::EncodedPacket;
+use rayplay_core::packet::EncodedPacket;
 
 fn make_encoded_packet(size: usize, is_keyframe: bool) -> EncodedPacket {
     EncodedPacket::new(vec![0xABu8; size], is_keyframe, 0, 16_667)

@@ -96,7 +96,7 @@ pub enum TransportError {
 /// [`VideoFragmenter`] and reassembled back into an [`EncodedPacket`] by
 /// [`VideoReassembler`].
 ///
-/// [`EncodedPacket`]: rayplay_video::packet::EncodedPacket
+/// [`EncodedPacket`]: rayplay_core::packet::EncodedPacket
 /// [`VideoFragmenter`]: crate::fragmenter::VideoFragmenter
 /// [`VideoReassembler`]: crate::reassembler::VideoReassembler
 #[derive(Debug, Clone, PartialEq, Eq)]

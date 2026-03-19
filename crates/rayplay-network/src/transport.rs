@@ -25,7 +25,7 @@ use std::net::SocketAddr;
 use quinn::{Connection, Endpoint};
 use rustls::pki_types::CertificateDer;
 
-use rayplay_video::packet::EncodedPacket;
+use rayplay_core::packet::EncodedPacket;
 
 use crate::{
     fragmenter::VideoFragmenter,
