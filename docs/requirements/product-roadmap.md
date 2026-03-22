@@ -33,6 +33,8 @@ screen rendered on the client at 60 fps. Video only, manual IP connection, CLI i
 | [UC-007](../uc/UC-007.md) | Client CLI (RayView) | P0 | S |
 | [UC-008](../uc/UC-008.md) | End-to-End Video Streaming | P0 | M |
 | [UC-026](../uc/UC-026.md) | Platform-Neutral Fallback Pipeline | P1 | L |
+| [UC-015](../uc/UC-015.md) | Session Resilience | P1 | M |
+| [UC-016](../uc/UC-016.md) | Connection Pairing & Security | P1 | M |
 
 ---
 
@@ -49,8 +51,6 @@ server discovery on LAN, and PIN-based security.
 | [UC-012](../uc/UC-012.md) | Host Audio Streaming | P1 | M |
 | [UC-013](../uc/UC-013.md) | Client Audio Playback | P1 | M |
 | [UC-014](../uc/UC-014.md) | Automatic Host Discovery | P1 | M |
-| [UC-015](../uc/UC-015.md) | Session Management | P1 | M |
-| [UC-016](../uc/UC-016.md) | Connection Pairing & Security | P1 | M |
 | [UC-025](../uc/UC-025.md) | Host Wake-on-LAN | P1 | M |
 
 ---
@@ -95,16 +95,18 @@ The following ADRs must be resolved before implementing the corresponding UCs:
 ## Dependency Graph
 
 ```
-M1 (serial pipeline):
+M1 (serial pipeline + connection security):
   UC-001 → UC-002 → UC-003 → UC-004 → UC-005
   UC-006 ← (UC-002 + UC-003)
   UC-007 ← (UC-004 + UC-005)
   UC-008 ← UC-006 + UC-007
+  UC-015 ← UC-008
+  UC-016 ← UC-015
 
 M2 (three parallel tracks after UC-008):
   Input:   UC-009 + UC-010 → UC-011
   Audio:   UC-012 → UC-013
-  Connect: UC-014, UC-015 → UC-016 → UC-025
+  Connect: UC-014 → UC-025
 
 M3 (mostly independent):
   UC-017 → UC-018
