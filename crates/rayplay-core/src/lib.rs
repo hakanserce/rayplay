@@ -2,9 +2,11 @@
 
 pub mod frame;
 pub mod packet;
+pub mod session;
 
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;
+pub use session::{ControlMessage, SessionError, SessionState, StreamParams};
 
 use std::future::Future;
 use thiserror::Error;

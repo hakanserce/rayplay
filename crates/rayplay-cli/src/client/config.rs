@@ -1,6 +1,6 @@
 //! CLI arguments and resolved configuration for the `rayview` client (UC-007).
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -39,6 +39,10 @@ pub struct ClientArgs {
     /// Force software pipeline — skip hardware acceleration even on supported platforms.
     #[arg(long)]
     pub software: bool,
+
+    /// Maximum time in seconds to keep reconnecting before giving up (0 = infinite).
+    #[arg(long, default_value_t = 30)]
+    pub reconnect_timeout: u64,
 }
 
 /// Resolved client configuration derived from [`ClientArgs`].
@@ -54,6 +58,8 @@ pub struct ClientConfig {
     pub height: u32,
     /// Pipeline mode for video decoding.
     pub pipeline_mode: PipelineMode,
+    /// Maximum reconnect duration (0 = infinite).
+    pub reconnect_timeout: Duration,
 }
 
 /// Returns the default certificate path: `$HOME/.config/rayview/server.der`.
@@ -98,12 +104,14 @@ impl ClientConfig {
         } else {
             PipelineMode::Auto
         };
+        let reconnect_timeout = Duration::from_secs(args.reconnect_timeout);
         Ok(Self {
             server_addr,
             cert_path,
             width: args.width,
             height: args.height,
             pipeline_mode,
+            reconnect_timeout,
         })
     }
 
@@ -138,6 +146,7 @@ mod tests {
             height: 720,
             cert: None,
             software: false,
+            reconnect_timeout: 30,
         }
     }
 
@@ -254,6 +263,7 @@ mod tests {
             width: 1280,
             height: 720,
             pipeline_mode: PipelineMode::Auto,
+            reconnect_timeout: Duration::from_secs(30),
         };
         assert_eq!(config.load_cert_bytes().unwrap(), b"fakecert");
     }
@@ -266,6 +276,7 @@ mod tests {
             width: 1280,
             height: 720,
             pipeline_mode: PipelineMode::Auto,
+            reconnect_timeout: Duration::from_secs(30),
         };
         let err = config.load_cert_bytes().unwrap_err();
         assert!(
@@ -299,5 +310,36 @@ mod tests {
         args.software = true;
         let config = ClientConfig::from_args(&args).unwrap();
         assert_eq!(config.pipeline_mode, PipelineMode::Software);
+    }
+
+    // ── --reconnect-timeout flag ─────────────────────────────────────────────
+
+    #[test]
+    fn test_client_args_default_reconnect_timeout() {
+        assert_eq!(
+            ClientArgs::parse_from(["rayview", "127.0.0.1"]).reconnect_timeout,
+            30
+        );
+    }
+
+    #[test]
+    fn test_client_args_custom_reconnect_timeout() {
+        let args =
+            ClientArgs::parse_from(["rayview", "127.0.0.1", "--reconnect-timeout", "60"]);
+        assert_eq!(args.reconnect_timeout, 60);
+    }
+
+    #[test]
+    fn test_from_args_reconnect_timeout_default() {
+        let config = ClientConfig::from_args(&dummy_args("127.0.0.1")).unwrap();
+        assert_eq!(config.reconnect_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_from_args_reconnect_timeout_zero_means_infinite() {
+        let mut args = dummy_args("127.0.0.1");
+        args.reconnect_timeout = 0;
+        let config = ClientConfig::from_args(&args).unwrap();
+        assert_eq!(config.reconnect_timeout, Duration::ZERO);
     }
 }

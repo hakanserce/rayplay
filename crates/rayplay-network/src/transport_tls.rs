@@ -29,10 +29,12 @@ pub(crate) fn make_server_config() -> Result<(CertificateDer<'static>, ServerCon
         .map_err(|e| TransportError::TlsError(e.to_string()))?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
-    // Enable datagram support by setting a non-None receive buffer.
-    Arc::get_mut(&mut server_config.transport)
-        .expect("no other Arc references at construction time")
-        .datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
+    // Enable datagram support and allow one bidirectional stream for the
+    // session control channel (ADR-010).
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
+    transport_config.max_concurrent_bidi_streams(1u32.into());
+    server_config.transport = Arc::new(transport_config);
 
     Ok((cert_der, server_config))
 }
@@ -56,6 +58,7 @@ pub(crate) fn make_client_config(
 
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.datagram_receive_buffer_size(Some(MAX_DATAGRAM_BUFFER));
+    transport_config.max_concurrent_bidi_streams(1u32.into());
 
     let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
     client_config.transport_config(Arc::new(transport_config));

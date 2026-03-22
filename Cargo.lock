@@ -2026,6 +2026,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2053,8 +2054,10 @@ dependencies = [
  "rcgen",
  "rustls",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

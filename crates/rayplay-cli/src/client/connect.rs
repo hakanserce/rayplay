@@ -44,11 +44,15 @@ where
 
 /// Wraps `connect_with_handler` in a retry loop with exponential backoff.
 ///
-/// Retries on connection failure until `token` is cancelled. Backoff starts at
-/// 500ms and doubles up to a 10s cap, resetting on each successful connection.
+/// Retries on connection failure until `token` is cancelled or
+/// `reconnect_timeout` is exceeded. Backoff starts at 500ms and doubles up
+/// to a 10s cap, resetting on each successful connection.
+///
+/// A `reconnect_timeout` of `Duration::ZERO` means infinite retries.
 pub(crate) async fn connect_with_reconnect<F, Fut>(
     server_addr: SocketAddr,
     server_cert: Vec<u8>,
+    reconnect_timeout: std::time::Duration,
     token: CancellationToken,
     on_connect: F,
 ) -> Result<()>
@@ -60,6 +64,7 @@ where
     const MAX_BACKOFF_MS: u64 = 10_000;
 
     let mut backoff_ms = INITIAL_BACKOFF_MS;
+    let mut disconnect_start: Option<std::time::Instant> = None;
 
     loop {
         if token.is_cancelled() {
@@ -72,16 +77,22 @@ where
 
         match result {
             Ok(()) => {
-                // Connection succeeded and handler returned (client disconnected).
-                // Reset backoff and reconnect.
                 backoff_ms = INITIAL_BACKOFF_MS;
-                tracing::info!("Disconnected from host, will reconnect");
+                disconnect_start = None;
+                tracing::info!(state = "Reconnecting", "Disconnected from host, will reconnect");
             }
             Err(e) => {
                 if token.is_cancelled() {
                     return Ok(());
                 }
-                tracing::info!(error = %e, backoff_ms, "Connection failed, retrying");
+
+                let start = *disconnect_start.get_or_insert_with(std::time::Instant::now);
+                if !reconnect_timeout.is_zero() && start.elapsed() >= reconnect_timeout {
+                    tracing::info!(state = "Disconnected", "Reconnect timeout exceeded, giving up");
+                    return Err(anyhow::anyhow!("reconnect timeout exceeded after {reconnect_timeout:?}"));
+                }
+
+                tracing::info!(state = "Reconnecting", error = %e, backoff_ms, "Connection failed, retrying");
             }
         }
 
@@ -118,8 +129,9 @@ pub async fn connect(
     let cert_bytes = config.load_cert_bytes()?;
     let server_addr = config.server_addr;
     let pipeline_mode = config.pipeline_mode;
+    let reconnect_timeout = config.reconnect_timeout;
 
-    connect_with_reconnect(server_addr, cert_bytes, token, |transport, child| {
+    connect_with_reconnect(server_addr, cert_bytes, reconnect_timeout, token, |transport, child| {
         let frame_tx = frame_tx.clone();
         async move {
             // Default to HEVC for now; could be made configurable in the future
@@ -194,7 +206,7 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         assert!(
-            connect_with_reconnect(addr, cert_bytes, token, |_t, _s| async { Ok(()) })
+            connect_with_reconnect(addr, cert_bytes, std::time::Duration::ZERO, token, |_t, _s| async { Ok(()) })
                 .await
                 .is_ok()
         );
@@ -217,7 +229,7 @@ mod tests {
             token2.cancel();
         });
         assert!(
-            connect_with_reconnect(addr, wrong_cert, token, |_t, _s| async { Ok(()) })
+            connect_with_reconnect(addr, wrong_cert, std::time::Duration::ZERO, token, |_t, _s| async { Ok(()) })
                 .await
                 .is_ok()
         );
@@ -237,7 +249,7 @@ mod tests {
         let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = call_count.clone();
         let result = tokio::spawn(async move {
-            connect_with_reconnect(addr, cert_bytes, token, move |_t, _s| {
+            connect_with_reconnect(addr, cert_bytes, std::time::Duration::ZERO, token, move |_t, _s| {
                 let c = count.clone();
                 let t = token2.clone();
                 async move {
@@ -265,6 +277,7 @@ mod tests {
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,
+            reconnect_timeout: std::time::Duration::from_secs(30),
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();
@@ -287,6 +300,7 @@ mod tests {
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,
+            reconnect_timeout: std::time::Duration::from_secs(30),
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();
@@ -309,6 +323,7 @@ mod tests {
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,
+            reconnect_timeout: std::time::Duration::from_secs(30),
         };
         let (frame_tx, _rx) = crossbeam_channel::bounded(4);
         let token = CancellationToken::new();

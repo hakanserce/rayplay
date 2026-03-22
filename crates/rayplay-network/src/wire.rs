@@ -88,6 +88,22 @@ pub enum TransportError {
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// QUIC stream write error on the control channel.
+    #[error("stream write error: {0}")]
+    StreamWrite(String),
+
+    /// QUIC stream read error on the control channel.
+    #[error("stream read error: {0}")]
+    StreamRead(String),
+
+    /// A control message exceeds the maximum allowed size.
+    #[error("control message exceeds max size: {0} bytes")]
+    MessageTooLarge(usize),
+
+    /// A control message could not be deserialized from JSON.
+    #[error("control message parse error: {0}")]
+    MessageParse(String),
 }
 
 /// A single video fragment as exchanged over QUIC unreliable datagrams.
@@ -435,5 +451,29 @@ mod tests {
     fn test_transport_error_endpoint_closed_display() {
         let e = TransportError::EndpointClosed;
         assert_eq!(e.to_string(), "endpoint closed");
+    }
+
+    #[test]
+    fn test_transport_error_stream_write_display() {
+        let e = TransportError::StreamWrite("broken pipe".to_string());
+        assert_eq!(e.to_string(), "stream write error: broken pipe");
+    }
+
+    #[test]
+    fn test_transport_error_stream_read_display() {
+        let e = TransportError::StreamRead("reset".to_string());
+        assert_eq!(e.to_string(), "stream read error: reset");
+    }
+
+    #[test]
+    fn test_transport_error_message_too_large_display() {
+        let e = TransportError::MessageTooLarge(100_000);
+        assert!(e.to_string().contains("100000"));
+    }
+
+    #[test]
+    fn test_transport_error_message_parse_display() {
+        let e = TransportError::MessageParse("invalid json".to_string());
+        assert!(e.to_string().contains("invalid json"));
     }
 }
