@@ -2,11 +2,13 @@
 
 pub mod frame;
 pub mod packet;
+pub mod pairing;
 pub mod session;
 
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;
-pub use session::{ControlMessage, SessionError, SessionState, StreamParams};
+pub use pairing::{PairingError, TrustDatabase, TrustedClient};
+pub use session::{ControlMessage, PairingOutcome, SessionError, SessionState, StreamParams};
 
 use std::future::Future;
 use thiserror::Error;

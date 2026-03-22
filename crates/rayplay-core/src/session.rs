@@ -1,4 +1,4 @@
-//! Session control types for the RayPlay streaming protocol (UC-015, ADR-010).
+//! Session control types for the `RayPlay` streaming protocol (UC-015, ADR-010).
 //!
 //! Defines the control messages exchanged over a reliable QUIC bidirectional
 //! stream, stream parameter negotiation types, observable session state, and
@@ -24,6 +24,15 @@ pub struct StreamParams {
     pub codec: String,
 }
 
+/// Outcome of a SPAKE2 pairing attempt (UC-016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PairingOutcome {
+    /// The client is now trusted and may connect without a PIN.
+    Accepted,
+    /// The pairing was rejected (wrong PIN, protocol error, etc.).
+    Rejected(String),
+}
+
 /// Control messages exchanged over the reliable bidirectional QUIC stream.
 ///
 /// Wire format: 4-byte little-endian length prefix followed by JSON payload.
@@ -39,6 +48,20 @@ pub enum ControlMessage {
     KeepaliveAck,
     /// Bidirectional graceful disconnect signal (UC-015 AC5).
     Disconnect,
+    /// Client → Host: SPAKE2 message for PIN-based pairing (UC-016).
+    PairingRequest(Vec<u8>),
+    /// Host → Client: SPAKE2 response message (UC-016).
+    PairingResponse(Vec<u8>),
+    /// Client → Host: HMAC confirmation with embedded public key (UC-016).
+    PairingConfirm(Vec<u8>),
+    /// Host → Client: pairing result (UC-016).
+    PairingResult(PairingOutcome),
+    /// Host → Client: random nonce for trusted-client auth (UC-016).
+    AuthChallenge(Vec<u8>),
+    /// Client → Host: public key + signed nonce (UC-016).
+    AuthResponse(Vec<u8>),
+    /// Host → Client: authentication succeeded or failed (UC-016).
+    AuthResult(bool),
 }
 
 /// Observable session state for UI feedback (UC-015 AC3).
@@ -70,6 +93,9 @@ pub enum SessionError {
     /// A transport-level error occurred on the control channel.
     #[error("transport error: {0}")]
     Transport(String),
+    /// A pairing or authentication error (UC-016).
+    #[error("pairing failed: {0}")]
+    PairingFailed(String),
 }
 
 #[cfg(test)]
@@ -271,5 +297,135 @@ mod tests {
     fn test_session_error_debug_format() {
         let e = SessionError::KeepaliveTimeout;
         assert!(format!("{e:?}").contains("KeepaliveTimeout"));
+    }
+
+    #[test]
+    fn test_session_error_pairing_failed_display() {
+        let e = SessionError::PairingFailed("wrong pin".to_string());
+        assert_eq!(e.to_string(), "pairing failed: wrong pin");
+    }
+
+    // ── PairingOutcome ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pairing_outcome_accepted_serde_roundtrip() {
+        let o = PairingOutcome::Accepted;
+        let json = serde_json::to_string(&o).unwrap();
+        let restored: PairingOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(o, restored);
+    }
+
+    #[test]
+    fn test_pairing_outcome_rejected_serde_roundtrip() {
+        let o = PairingOutcome::Rejected("wrong pin".to_string());
+        let json = serde_json::to_string(&o).unwrap();
+        let restored: PairingOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(o, restored);
+    }
+
+    #[test]
+    fn test_pairing_outcome_clone_equals_original() {
+        let o = PairingOutcome::Accepted;
+        assert_eq!(o.clone(), o);
+    }
+
+    #[test]
+    fn test_pairing_outcome_variants_are_distinct() {
+        assert_ne!(
+            PairingOutcome::Accepted,
+            PairingOutcome::Rejected(String::new()),
+        );
+    }
+
+    #[test]
+    fn test_pairing_outcome_debug_format() {
+        assert!(format!("{:?}", PairingOutcome::Accepted).contains("Accepted"));
+        assert!(format!("{:?}", PairingOutcome::Rejected("x".into())).contains("Rejected"));
+    }
+
+    // ── ControlMessage pairing variants serde ───────────────────────────────
+
+    #[test]
+    fn test_serde_pairing_request() {
+        let msg = ControlMessage::PairingRequest(vec![1, 2, 3]);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_pairing_response() {
+        let msg = ControlMessage::PairingResponse(vec![4, 5, 6]);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_pairing_confirm() {
+        let msg = ControlMessage::PairingConfirm(vec![7, 8, 9]);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_pairing_result_accepted() {
+        let msg = ControlMessage::PairingResult(PairingOutcome::Accepted);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_pairing_result_rejected() {
+        let msg = ControlMessage::PairingResult(PairingOutcome::Rejected("bad".into()));
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_auth_challenge() {
+        let msg = ControlMessage::AuthChallenge(vec![10, 11]);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_auth_response() {
+        let msg = ControlMessage::AuthResponse(vec![12, 13]);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_auth_result_true() {
+        let msg = ControlMessage::AuthResult(true);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_serde_auth_result_false() {
+        let msg = ControlMessage::AuthResult(false);
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_pairing_variants_are_distinct() {
+        assert_ne!(
+            ControlMessage::PairingRequest(vec![1]),
+            ControlMessage::PairingResponse(vec![1]),
+        );
+        assert_ne!(
+            ControlMessage::AuthChallenge(vec![1]),
+            ControlMessage::AuthResponse(vec![1]),
+        );
     }
 }
