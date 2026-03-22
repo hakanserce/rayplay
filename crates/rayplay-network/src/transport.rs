@@ -31,7 +31,7 @@ use crate::{
     control::{ControlChannel, ControlReceiver, ControlSender},
     fragmenter::VideoFragmenter,
     reassembler::{MAX_IN_FLIGHT_FRAMES, VideoReassembler},
-    transport_tls::{make_client_config, make_server_config},
+    transport_tls::{make_client_config, make_client_config_insecure, make_server_config},
     wire::{TransportError, VideoFragment},
 };
 
@@ -127,6 +127,29 @@ impl QuicVideoTransport {
         server_cert: Vec<u8>,
     ) -> Result<Self, TransportError> {
         let client_config = make_client_config(CertificateDer::from(server_cert))?;
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("valid wildcard address");
+        let mut endpoint = Endpoint::client(bind_addr)?;
+        endpoint.set_default_client_config(client_config);
+        let connection = endpoint.connect(server_addr, "localhost")?.await?;
+        Ok(Self::from_connection(connection))
+    }
+
+    /// Creates a client-side transport connecting to `server_addr` without
+    /// verifying the server's TLS certificate.
+    ///
+    /// Used during the SPAKE2 pairing flow where the PIN-based key agreement
+    /// provides authentication independently of TLS certificate validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] if TLS setup or the QUIC handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `"0.0.0.0:0"` cannot be parsed as a `SocketAddr` (unreachable
+    /// in practice).
+    pub async fn connect_insecure(server_addr: SocketAddr) -> Result<Self, TransportError> {
+        let client_config = make_client_config_insecure()?;
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("valid wildcard address");
         let mut endpoint = Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(client_config);
@@ -472,5 +495,28 @@ mod tests {
             client.fragmenter.max_payload(),
             crate::wire::MAX_FRAGMENT_PAYLOAD,
         );
+    }
+
+    // ── connect_insecure ─────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_connect_insecure_establishes_connection() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (listener, _cert) = QuicVideoTransport::listen(bind).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move { listener.accept().await });
+        let client = QuicVideoTransport::connect_insecure(server_addr)
+            .await
+            .expect("insecure connect should succeed");
+        assert_eq!(
+            client.fragmenter.max_payload(),
+            crate::wire::MAX_FRAGMENT_PAYLOAD,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_connect_insecure_fails_when_no_server() {
+        let result = QuicVideoTransport::connect_insecure("127.0.0.1:1".parse().unwrap()).await;
+        assert!(result.is_err());
     }
 }

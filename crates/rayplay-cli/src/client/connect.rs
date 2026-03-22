@@ -112,12 +112,13 @@ where
 /// Connects to the host in `config` and runs the full receive-decode pipeline
 /// with automatic reconnection on failure.
 ///
-/// Reads the server certificate from `config.cert_path`, establishes the QUIC
-/// connection, and loops: receive → decode → forward frame.
+/// If `config.pair` is set, uses insecure TLS + SPAKE2 PIN pairing.
+/// Otherwise tries trusted-client auth with a saved key, falling back to
+/// cert-based connection.
 ///
 /// # Errors
 ///
-/// Returns an error if the certificate cannot be read.
+/// Returns an error if the certificate cannot be read or pairing fails.
 #[cfg(target_os = "macos")]
 pub async fn connect(
     config: super::config::ClientConfig,
@@ -126,21 +127,57 @@ pub async fn connect(
 ) -> Result<()> {
     use rayplay_video::{Codec, create_decoder};
 
-    let cert_bytes = config.load_cert_bytes()?;
     let server_addr = config.server_addr;
     let pipeline_mode = config.pipeline_mode;
     let reconnect_timeout = config.reconnect_timeout;
 
-    connect_with_reconnect(server_addr, cert_bytes, reconnect_timeout, token, |transport, child| {
-        let frame_tx = frame_tx.clone();
-        async move {
-            // Default to HEVC for now; could be made configurable in the future
-            let decoder = create_decoder(Codec::Hevc, pipeline_mode)
-                .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
-            super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
-        }
-    })
-    .await
+    if config.pair {
+        // Pairing mode: insecure connect + SPAKE2
+        let transport = QuicVideoTransport::connect_insecure(server_addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("insecure connect failed: {e}"))?;
+
+        tracing::info!("Connected to host (insecure mode for pairing)");
+
+        let mut control = transport
+            .open_control()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
+
+        // Prompt user for PIN
+        tracing::info!("Enter the 6-digit PIN shown on the host:");
+        let mut pin = String::new();
+        std::io::stdin()
+            .read_line(&mut pin)
+            .map_err(|e| anyhow::anyhow!("failed to read PIN: {e}"))?;
+        let pin = pin.trim().to_string();
+
+        let signing_key = rayplay_network::client_pairing(&mut control, &pin)
+            .await
+            .map_err(|e| anyhow::anyhow!("pairing failed: {e}"))?;
+
+        tracing::info!("Pairing successful! Saving client key.");
+        rayplay_network::client_key_store::save_client_key(&signing_key)
+            .map_err(|e| anyhow::anyhow!("failed to save client key: {e}"))?;
+
+        // After pairing, run the decode pipeline on this connection
+        let decoder = create_decoder(Codec::Hevc, pipeline_mode)
+            .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
+        super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
+    } else {
+        // Normal mode: cert-based connect with reconnect
+        let cert_bytes = config.load_cert_bytes()?;
+
+        connect_with_reconnect(server_addr, cert_bytes, reconnect_timeout, token, |transport, child| {
+            let frame_tx = frame_tx.clone();
+            async move {
+                let decoder = create_decoder(Codec::Hevc, pipeline_mode)
+                    .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
+                super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
+            }
+        })
+        .await
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -274,6 +311,7 @@ mod tests {
         let config = ClientConfig {
             server_addr: "127.0.0.1:5000".parse().unwrap(),
             cert_path: "/nonexistent/cert.der".into(),
+            pair: false,
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,
@@ -297,6 +335,7 @@ mod tests {
         let config = ClientConfig {
             server_addr: addr,
             cert_path,
+            pair: false,
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,
@@ -320,6 +359,7 @@ mod tests {
         let config = ClientConfig {
             server_addr: addr,
             cert_path,
+            pair: false,
             width: 1280,
             height: 720,
             pipeline_mode: rayplay_video::PipelineMode::Auto,

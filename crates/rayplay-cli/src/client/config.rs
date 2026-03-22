@@ -36,6 +36,14 @@ pub struct ClientArgs {
     #[arg(long)]
     pub cert: Option<PathBuf>,
 
+    /// Pair with the host using a 6-digit PIN (first-time connection).
+    ///
+    /// When set, the client connects without verifying the server certificate
+    /// and performs SPAKE2 PIN-based pairing.  The resulting ed25519 key is
+    /// saved locally for subsequent trusted reconnections.
+    #[arg(long)]
+    pub pair: bool,
+
     /// Force software pipeline — skip hardware acceleration even on supported platforms.
     #[arg(long)]
     pub software: bool,
@@ -52,6 +60,8 @@ pub struct ClientConfig {
     pub server_addr: SocketAddr,
     /// Path to the host's DER-encoded TLS certificate.
     pub cert_path: PathBuf,
+    /// Whether to initiate PIN-based pairing (first-time connection).
+    pub pair: bool,
     /// Window width in logical pixels.
     pub width: u32,
     /// Window height in logical pixels.
@@ -108,6 +118,7 @@ impl ClientConfig {
         Ok(Self {
             server_addr,
             cert_path,
+            pair: args.pair,
             width: args.width,
             height: args.height,
             pipeline_mode,
@@ -145,6 +156,7 @@ mod tests {
             width: 1280,
             height: 720,
             cert: None,
+            pair: false,
             software: false,
             reconnect_timeout: 30,
         }
@@ -260,6 +272,7 @@ mod tests {
         let config = ClientConfig {
             server_addr: "127.0.0.1:5000".parse().unwrap(),
             cert_path: path,
+            pair: false,
             width: 1280,
             height: 720,
             pipeline_mode: PipelineMode::Auto,
@@ -273,6 +286,7 @@ mod tests {
         let config = ClientConfig {
             server_addr: "127.0.0.1:5000".parse().unwrap(),
             cert_path: "/no/such/file.der".into(),
+            pair: false,
             width: 1280,
             height: 720,
             pipeline_mode: PipelineMode::Auto,

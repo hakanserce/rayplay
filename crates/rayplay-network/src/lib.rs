@@ -10,6 +10,7 @@
 //! Client: ◄──UDP── QUIC datagrams → VideoReassembler → EncodedPacket
 //! ```
 
+pub mod client_key_store;
 pub mod control;
 pub mod fragmenter;
 pub mod handshake;

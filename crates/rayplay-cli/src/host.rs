@@ -4,6 +4,7 @@ use std::{future::Future, net::SocketAddr};
 
 use anyhow::Result;
 use clap::Parser;
+use rayplay_core::pairing::TrustDatabase;
 use rayplay_network::{QuicListener, QuicVideoTransport};
 use rayplay_video::PipelineMode;
 #[cfg(target_os = "windows")]
@@ -137,17 +138,29 @@ where
 /// Starts the host server: binds the listener, logs the address, and drives
 /// the capture → encode → transport pipeline until shutdown.
 ///
+/// For each incoming connection, the host first attempts authentication:
+/// 1. Try challenge-response auth (trusted client reconnection).
+/// 2. If auth fails, generate a PIN and run SPAKE2 pairing.
+/// 3. Only after successful auth/pairing does media streaming begin.
+///
 /// # Errors
 ///
 /// Returns an error if the QUIC handshake or streaming pipeline fails.
 pub async fn serve(
     listener: QuicListener,
     config: HostConfig,
+    trust_db: std::sync::Arc<tokio::sync::Mutex<TrustDatabase>>,
     token: CancellationToken,
 ) -> Result<()> {
     serve_with_handler(listener, token, |transport, child| {
         let config = config.clone();
-        async move { stream(transport, config, child).await }
+        let trust_db = trust_db.clone();
+        async move {
+            crate::host_pairing_glue::authenticate_and_stream(
+                transport, config, trust_db, child,
+            )
+            .await
+        }
     })
     .await
 }
@@ -381,7 +394,7 @@ pub(crate) async fn stream_with_zero_copy_pipeline(
 /// Resolves platform-specific capture and encoder then calls
 /// [`stream_with_zero_copy_pipeline`] for the zero-copy GPU path.
 #[cfg(target_os = "windows")]
-async fn stream(
+pub(crate) async fn stream(
     transport: QuicVideoTransport,
     config: HostConfig,
     token: CancellationToken,
@@ -412,7 +425,7 @@ async fn stream(
 // The Windows version is `async`; keep the same signature here.
 #[cfg(not(target_os = "windows"))]
 #[allow(clippy::unused_async)]
-async fn stream(
+pub(crate) async fn stream(
     _transport: QuicVideoTransport,
     _config: HostConfig,
     _token: CancellationToken,
@@ -457,6 +470,10 @@ mod tests {
         let (listener, _cert) = QuicVideoTransport::listen(bind).unwrap();
         let addr = listener.local_addr().unwrap();
         (listener, addr)
+    }
+
+    fn empty_trust_db() -> std::sync::Arc<tokio::sync::Mutex<TrustDatabase>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(TrustDatabase::new()))
     }
 
     /// Handler that succeeds immediately — used where the on_connect callback
@@ -964,7 +981,7 @@ mod tests {
         let (listener, _addr) = listen_loopback();
         let token = CancellationToken::new();
         token.cancel();
-        assert!(serve(listener, default_config(), token).await.is_ok());
+        assert!(serve(listener, default_config(), empty_trust_db(), token).await.is_ok());
     }
 
     // ── drive_encode_loop — direct unit tests ─────────────────────────────────
@@ -1374,7 +1391,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let token = CancellationToken::new();
         let token2 = token.clone();
-        let task = tokio::spawn(serve(listener, default_config(), token));
+        let task = tokio::spawn(serve(listener, default_config(), empty_trust_db(), token));
         QuicVideoTransport::connect(addr, cert_der)
             .await
             .expect("connect");

@@ -52,11 +52,42 @@ with near-zero latency.
 
 ### Run
 
-    # Start the server (Windows host)
-    cargo run -p rayplay-cli -- server --bind 0.0.0.0:9000
+RayPlay uses two binaries: `rayhost` (server) and `rayview` (client).
 
-    # Start the client (macOS)
-    cargo run -p rayplay-cli -- client --host 192.168.1.100:9000
+    # Start the host (Windows)
+    cargo run --bin rayhost -- --port 5000
+
+    # Start the host with custom settings
+    cargo run --bin rayhost -- --port 5000 --width 1920 --height 1080 --fps 60
+
+#### First-time pairing
+
+On first connection, the client must pair with the host using a 6-digit PIN.
+The host displays the PIN automatically when a client connects in pairing mode.
+
+    # Client: connect in pairing mode (macOS)
+    cargo run --bin rayview -- 192.168.1.100 --port 5000 --pair
+
+    # The host console will display a PIN like:
+    #   Pairing PIN: 482901
+    #   Enter this PIN on the client.
+    #
+    # Type the PIN into the client prompt and press Enter.
+    # The client's ed25519 key is saved locally for future connections.
+
+#### Subsequent connections
+
+After pairing, the client authenticates automatically via challenge-response.
+A server certificate is still required for the TLS transport until auto-discovery
+is implemented (UC-014):
+
+    # Client: reconnect with saved certificate
+    cargo run --bin rayview -- 192.168.1.100 --port 5000 --cert path/to/server.der
+
+#### CLI options
+
+    rayhost --help     # Show all host options (port, resolution, fps, bitrate)
+    rayview --help     # Show all client options (host, port, --pair, --cert, --software)
 
 ### Test
 

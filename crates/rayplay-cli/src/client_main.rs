@@ -36,6 +36,7 @@ fn main() -> Result<()> {
         addr    = %config.server_addr,
         width   = config.width,
         height  = config.height,
+        pair    = config.pair,
         "RayView connecting"
     );
 

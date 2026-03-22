@@ -2238,6 +2238,7 @@ dependencies = [
  "clap",
  "criterion",
  "crossbeam-channel",
+ "rayplay-core",
  "rayplay-network",
  "rayplay-video",
  "tempfile",
