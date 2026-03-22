@@ -4,15 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-thiserror.workspace = true
-tokio.workspace     = true
-tracing.workspace   = true
-serde.workspace     = true
-rayplay-core        = { path = "../rayplay-core" }
+thiserror.workspace   = true
+tokio.workspace       = true
+tracing.workspace     = true
+serde.workspace       = true
+serde_json.workspace  = true
+rayplay-core          = { path = "../rayplay-core" }
 quinn               = { version = "0.11", default-features = true }
 rustls              = { version = "0.23", default-features = false, features = ["ring"] }
 rcgen               = "0.13"
 bytes               = "1"
+tokio-util.workspace  = true
 
 [dev-dependencies]
 criterion.workspace = true

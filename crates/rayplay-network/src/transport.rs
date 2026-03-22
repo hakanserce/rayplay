@@ -28,6 +28,7 @@ use rustls::pki_types::CertificateDer;
 use rayplay_core::packet::EncodedPacket;
 
 use crate::{
+    control::{ControlChannel, ControlReceiver, ControlSender},
     fragmenter::VideoFragmenter,
     reassembler::{MAX_IN_FLIGHT_FRAMES, VideoReassembler},
     transport_tls::{make_client_config, make_server_config},
@@ -85,7 +86,7 @@ impl QuicListener {
 /// QUIC-based video transport that sends and receives [`EncodedPacket`]s as
 /// RFC 9221 unreliable datagrams.
 pub struct QuicVideoTransport {
-    connection: Connection,
+    pub(crate) connection: Connection,
     pub(crate) fragmenter: VideoFragmenter,
     reassembler: VideoReassembler,
 }
@@ -140,6 +141,32 @@ impl QuicVideoTransport {
             fragmenter: VideoFragmenter::with_default_payload(),
             reassembler: VideoReassembler::with_default_max(),
         }
+    }
+
+    /// Opens a bidirectional QUIC stream for session control (client side).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Connection`] if the stream cannot be opened.
+    pub async fn open_control(&self) -> Result<ControlChannel, TransportError> {
+        let (send, recv) = self.connection.open_bi().await?;
+        Ok(ControlChannel {
+            sender: ControlSender::new(send),
+            receiver: ControlReceiver::new(recv),
+        })
+    }
+
+    /// Accepts a bidirectional QUIC stream for session control (host side).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Connection`] if the stream cannot be accepted.
+    pub async fn accept_control(&self) -> Result<ControlChannel, TransportError> {
+        let (send, recv) = self.connection.accept_bi().await?;
+        Ok(ControlChannel {
+            sender: ControlSender::new(send),
+            receiver: ControlReceiver::new(recv),
+        })
     }
 
     /// Sends an [`EncodedPacket`] as one or more QUIC unreliable datagrams.
