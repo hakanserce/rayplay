@@ -307,10 +307,13 @@ async fn test_client_pairing_unexpected_response() {
             .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
+        // Keep alive so the client reads the wrong message (not a transport error)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     });
 
     let result = client_pairing(&mut client_ctrl, "123456").await;
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected PairingResponse"), "got: {err}");
     server_task.await.unwrap();
 }
 
@@ -328,10 +331,13 @@ async fn test_client_auth_unexpected_challenge_message() {
             .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
+        // Keep alive so the client reads the wrong message (not a transport error)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     });
 
     let result = client_auth_response(&mut client_ctrl, &key).await;
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected AuthChallenge"), "got: {err}");
     server_task.await.unwrap();
 }
 
@@ -356,10 +362,13 @@ async fn test_client_auth_unexpected_result_message() {
             .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
+        // Keep alive so the client reads the wrong message (not a transport error)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     });
 
     let result = client_auth_response(&mut client_ctrl, &key).await;
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected AuthResult"), "got: {err}");
     server_task.await.unwrap();
 }
 
@@ -603,10 +612,13 @@ async fn test_client_pairing_result_unexpected_message() {
             .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
+        // Keep alive so the client reads the wrong message (not a transport error)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     });
 
     let result = client_pairing(&mut client_ctrl, pin).await;
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("expected PairingResult"), "got: {err}");
     server_task.await.unwrap();
 }
 
