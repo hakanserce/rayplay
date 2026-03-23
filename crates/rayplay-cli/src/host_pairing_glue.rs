@@ -82,103 +82,123 @@ async fn stream_with_handshake(
     mut control: rayplay_network::ControlChannel,
     token: CancellationToken,
 ) -> Result<()> {
-    // On Windows, we use the zero-copy pipeline which doesn't have a prepare_pipeline function
+    // On Windows Auto mode, use the zero-copy DXGI + NVENC pipeline.
+    // On Windows Software mode (or non-Windows), use the generic pipeline.
     #[cfg(target_os = "windows")]
-    {
-        use rayplay_video::{
-            CaptureConfig, SharedD3D11Device,
-            capture::ZeroCopyCapturer,
-            dxgi_capture::DxgiCapture,
-            encoder::{EncoderConfig, VideoEncoder as _},
-            nvenc::NvencEncoder,
-        };
-        use std::sync::Arc;
+    if config.pipeline_mode == rayplay_video::PipelineMode::Auto {
+        return stream_windows_zero_copy(transport, config, &mut control, token).await;
+    }
 
-        let device = Arc::new(SharedD3D11Device::new().map_err(anyhow::Error::from)?);
+    let (capturer, encoder) = build_generic_pipeline(&config).await?;
+
+    negotiate_and_stream(transport, &mut control, capturer, encoder, token).await
+}
+
+/// Windows zero-copy pipeline: DXGI capture + NVENC hardware encoder.
+#[cfg(target_os = "windows")]
+async fn stream_windows_zero_copy(
+    transport: QuicVideoTransport,
+    config: HostConfig,
+    control: &mut rayplay_network::ControlChannel,
+    token: CancellationToken,
+) -> Result<()> {
+    use rayplay_video::{
+        CaptureConfig, SharedD3D11Device,
+        capture::ZeroCopyCapturer,
+        dxgi_capture::DxgiCapture,
+        encoder::{EncoderConfig, VideoEncoder as _},
+        nvenc::NvencEncoder,
+    };
+    use std::sync::Arc;
+
+    let device = Arc::new(SharedD3D11Device::new().map_err(anyhow::Error::from)?);
+    let cap_config = CaptureConfig {
+        target_fps: config.encoder_config.fps,
+        acquire_timeout_ms: 100,
+    };
+    let capturer = DxgiCapture::new(cap_config, device.clone()).map_err(anyhow::Error::from)?;
+    let (cap_width, cap_height) = <DxgiCapture as ZeroCopyCapturer>::resolution(&capturer);
+
+    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
+        .with_bitrate(config.encoder_config.bitrate);
+    let encoder = NvencEncoder::new(enc_config).map_err(anyhow::Error::from)?;
+
+    let actual_codec = encoder.config().codec;
+    let stream_params = StreamParams {
+        width: cap_width,
+        height: cap_height,
+        fps: config.encoder_config.fps,
+        codec: actual_codec.to_string(),
+    };
+    let _agreed = host_handshake(control, |_proposed| stream_params.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("handshake failed: {e}"))?;
+    tracing::info!(codec = %actual_codec, width = cap_width, height = cap_height, "Codec negotiation complete");
+
+    crate::host::stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
+}
+
+/// Builds the capturer + encoder pair using the platform-appropriate path.
+async fn build_generic_pipeline(
+    config: &HostConfig,
+) -> Result<(
+    Box<dyn rayplay_video::capture::ScreenCapturer>,
+    Box<dyn rayplay_video::encoder::VideoEncoder>,
+)> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::host_capture_macos::prepare_pipeline(config).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use rayplay_video::{CaptureConfig, create_capturer, encoder::{EncoderConfig, create_encoder}};
 
         let cap_config = CaptureConfig {
             target_fps: config.encoder_config.fps,
             acquire_timeout_ms: 100,
         };
-        let capturer = DxgiCapture::new(cap_config, device.clone()).map_err(anyhow::Error::from)?;
-        let (cap_width, cap_height) = <DxgiCapture as ZeroCopyCapturer>::resolution(&capturer);
+        let capturer =
+            create_capturer(cap_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
+        let (cap_width, cap_height) = capturer.resolution();
 
         let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-            .with_bitrate(config.encoder_config.bitrate);
-        let encoder = NvencEncoder::new(enc_config).map_err(anyhow::Error::from)?;
+            .with_bitrate(config.encoder_config.bitrate.clone());
+        let encoder =
+            create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
 
-        // Get actual codec from encoder
-        let actual_codec = encoder.config().codec;
-
-        // Build stream params with actual values
-        let stream_params = StreamParams {
-            width: cap_width,
-            height: cap_height,
-            fps: config.encoder_config.fps,
-            codec: actual_codec.to_string(),
-        };
-
-        // Run handshake - we return the actual params regardless of what client proposes
-        let _agreed_params = host_handshake(&mut control, |_proposed| stream_params.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("handshake failed: {e}"))?;
-
-        tracing::info!(
-            codec = %actual_codec,
-            width = cap_width,
-            height = cap_height,
-            fps = config.encoder_config.fps,
-            "Codec negotiation complete"
-        );
-
-        // Use the zero-copy streaming path for Windows
-        crate::host::stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
+        Ok((capturer, encoder))
     }
+}
 
-    // On macOS and other platforms, use prepare_pipeline
-    #[cfg(not(target_os = "windows"))]
-    {
-        use crate::host::stream_with_pipeline;
+/// Runs the codec handshake and then streams using the generic (boxed) pipeline.
+async fn negotiate_and_stream(
+    transport: QuicVideoTransport,
+    control: &mut rayplay_network::ControlChannel,
+    capturer: Box<dyn rayplay_video::capture::ScreenCapturer>,
+    encoder: Box<dyn rayplay_video::encoder::VideoEncoder>,
+    token: CancellationToken,
+) -> Result<()> {
+    let actual_codec = encoder.config().codec;
+    let stream_params = StreamParams {
+        width: encoder.config().width,
+        height: encoder.config().height,
+        fps: encoder.config().fps,
+        codec: actual_codec.to_string(),
+    };
 
-        // Prepare the pipeline to get actual encoder config
-        let (capturer, encoder) = {
-            #[cfg(target_os = "macos")]
-            {
-                crate::host_capture_macos::prepare_pipeline(&config).await?
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                crate::host::prepare_pipeline(&config).await?
-            }
-        };
+    let _agreed = host_handshake(control, |_proposed| stream_params.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("handshake failed: {e}"))?;
 
-        // Get actual codec from encoder
-        let actual_codec = encoder.config().codec;
+    tracing::info!(
+        codec = %actual_codec,
+        width = encoder.config().width,
+        height = encoder.config().height,
+        fps = encoder.config().fps,
+        "Codec negotiation complete"
+    );
 
-        // Build stream params with actual values
-        let stream_params = StreamParams {
-            width: encoder.config().width,
-            height: encoder.config().height,
-            fps: encoder.config().fps,
-            codec: actual_codec.to_string(),
-        };
-
-        // Run handshake - we return the actual params regardless of what client proposes
-        let _agreed_params = host_handshake(&mut control, |_proposed| stream_params.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("handshake failed: {e}"))?;
-
-        tracing::info!(
-            codec = %actual_codec,
-            width = encoder.config().width,
-            height = encoder.config().height,
-            fps = encoder.config().fps,
-            "Codec negotiation complete"
-        );
-
-        // Use the regular streaming path for non-Windows platforms
-        stream_with_pipeline(transport, capturer, encoder, token).await
-    }
+    crate::host::stream_with_pipeline(transport, capturer, encoder, token).await
 }
 
 /// Best-effort save of the trust database to disk.
