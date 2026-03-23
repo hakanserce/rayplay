@@ -11,16 +11,31 @@ env:
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  check:
-    name: Quality Gates
+  # ── Format check (fast, runs once) ─────────────────────────────────────
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # ── Quality gates (Linux — tests + coverage) ──────────────────────────
+  quality-gates:
+    name: Quality Gates (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt, llvm-tools-preview
+          components: clippy, llvm-tools-preview
 
       - name: Cache cargo dependencies
         uses: actions/cache@v5
@@ -31,15 +46,60 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: $ runner.os -cargo-$ hashFiles('**/Cargo.lock')
-          restore-keys: $ runner.os -cargo-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install cargo-make
         uses: taiki-e/install-action@cargo-make
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Run CI pipeline
         run: cargo make ci
 
+  # ── Cross-platform check + clippy (macOS & Windows) ────────────────────
+  cross-check:
+    name: Check (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Compile check
+        run: cargo check --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -W clippy::pedantic
+
+  # ── FFmpeg fallback (Linux only) ───────────────────────────────────────
   ffmpeg-check:
     name: FFmpeg Fallback
     runs-on: ubuntu-latest
@@ -51,8 +111,8 @@ jobs:
         with:
           components: clippy
 
-      - name: Install FFmpeg dev libraries
-        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev pkg-config clang
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev libx264-dev libx265-dev pkg-config clang
 
       - name: Cache cargo dependencies
         uses: actions/cache@v5
@@ -63,8 +123,8 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: $ runner.os -cargo-ffmpeg-$ hashFiles('**/Cargo.lock')
-          restore-keys: $ runner.os -cargo-ffmpeg-
+          key: ${{ runner.os }}-cargo-ffmpeg-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ffmpeg-
 
       - name: Compile check
         run: cargo check --workspace --features ffmpeg-fallback
@@ -78,12 +138,15 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --features ffmpeg-fallback -- -W clippy::pedantic
 
+  # ── Benchmarks (PR only) ───────────────────────────────────────────────
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v5
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-make
         uses: taiki-e/install-action@cargo-make

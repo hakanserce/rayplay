@@ -37,6 +37,13 @@ input goes directly to the host. Target latency similar to USB passthrough (Virt
             ├── ci.yml          # Quality gates (fmt, clippy, test, coverage)
             └── claude-review.yml  # Automated Claude PR reviews
 
+## First-Time Setup
+
+    git config core.hooksPath .githooks
+
+This activates the pre-commit hook that blocks commits with unformatted code.
+Worktrees inherit this setting automatically.
+
 ## Build & Test Commands
 
     cargo make build              # Build all workspace crates

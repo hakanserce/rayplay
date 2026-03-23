@@ -26,6 +26,7 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     "Win32_Foundation",
 ] }
 
@@ -52,6 +53,12 @@ fallback = ["dep:scrap", "dep:openh264"]
 ## Enable FFmpeg-based fallback implementations for advanced codec support.
 ## Opt-in due to FFmpeg's complex build requirements.
 ffmpeg-fallback = ["dep:ffmpeg-next", "dep:libc"]
+
+# The `objc` crate's `msg_send!` macro checks `cfg(feature = "cargo-clippy")`,
+# which is not a known feature of this crate. Tell check-cfg to expect it.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(feature, values("cargo-clippy"))']
 
 [dev-dependencies]
 criterion.workspace  = true

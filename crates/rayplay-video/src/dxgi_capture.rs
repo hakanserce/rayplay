@@ -8,6 +8,11 @@
 /// - **Zero-copy** ([`ZeroCopyCapturer`]): returns the GPU texture pointer
 ///   directly for NVENC to consume (ADR-001 Option B).
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::default_trait_access,
+    clippy::borrow_as_ptr,
+    clippy::cast_sign_loss
+)]
 mod inner {
     use std::cell::Cell;
     use std::ffi::c_void;
@@ -16,8 +21,8 @@ mod inner {
 
     use tracing::{debug, instrument};
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_FLAG, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+        D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+        ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
     use windows::Win32::Graphics::Dxgi::{
@@ -235,8 +240,8 @@ mod inner {
                 Quality: 0,
             },
             Usage: D3D11_USAGE_STAGING,
-            BindFlags: D3D11_BIND_FLAG(0),
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ,
+            BindFlags: 0u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
             MiscFlags: Default::default(),
         };
         let mut staging = None;

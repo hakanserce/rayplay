@@ -10,7 +10,7 @@ use rayplay_core::session::{ClientIntent, ControlMessage, StreamParams};
 use rayplay_network::{QuicVideoTransport, host_auth_challenge, host_handshake, host_pairing};
 use tokio_util::sync::CancellationToken;
 
-use crate::host::{HostConfig, stream_with_pipeline};
+use crate::host::HostConfig;
 
 /// Authenticates the client via challenge-response or PIN pairing, then streams.
 pub(crate) async fn authenticate_and_stream(
@@ -86,8 +86,11 @@ async fn stream_with_handshake(
     #[cfg(target_os = "windows")]
     {
         use rayplay_video::{
-            CaptureConfig, SharedD3D11Device, capture::ZeroCopyCapturer, dxgi_capture::DxgiCapture,
-            encoder::EncoderConfig, nvenc::NvencEncoder,
+            CaptureConfig, SharedD3D11Device,
+            capture::ZeroCopyCapturer,
+            dxgi_capture::DxgiCapture,
+            encoder::{EncoderConfig, VideoEncoder as _},
+            nvenc::NvencEncoder,
         };
         use std::sync::Arc;
 
@@ -135,6 +138,8 @@ async fn stream_with_handshake(
     // On macOS and other platforms, use prepare_pipeline
     #[cfg(not(target_os = "windows"))]
     {
+        use crate::host::stream_with_pipeline;
+
         // Prepare the pipeline to get actual encoder config
         let (capturer, encoder) = {
             #[cfg(target_os = "macos")]

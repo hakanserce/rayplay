@@ -65,6 +65,7 @@ pub fn create_capturer(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

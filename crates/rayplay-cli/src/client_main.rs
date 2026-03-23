@@ -3,9 +3,6 @@
 mod client;
 
 use anyhow::Result;
-use clap::Parser;
-use client::{ClientArgs, ClientConfig};
-use rayplay_video::{DecodedFrame, RenderWindow};
 
 /// Supported on macOS only; other platforms bail with a clear message.
 #[cfg(not(target_os = "macos"))]
@@ -15,6 +12,9 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
+    use clap::Parser;
+    use client::{ClientArgs, ClientConfig};
+    use rayplay_video::{DecodedFrame, RenderWindow};
     use tokio_util::sync::CancellationToken;
 
     /// Bounded capacity of the decoded-frame channel between the network thread

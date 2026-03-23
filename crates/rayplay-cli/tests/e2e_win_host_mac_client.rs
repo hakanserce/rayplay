@@ -54,8 +54,15 @@ async fn test_h264_vtdecoder_roundtrip() {
 
     let client_token = token.clone();
     let client_handle = tokio::spawn(async move {
-        run_client_recv_decode_render(client, create_vt_decoder(), frame_tx, client_token, 320, 240)
-            .await
+        run_client_recv_decode_render(
+            client,
+            create_vt_decoder(),
+            frame_tx,
+            client_token,
+            320,
+            240,
+        )
+        .await
     });
 
     let frames = collect_frames(&frame_rx, 3, Duration::from_secs(15));
@@ -92,8 +99,15 @@ async fn test_hardware_frame_has_iosurface() {
 
     let client_token = token.clone();
     let client_handle = tokio::spawn(async move {
-        run_client_recv_decode_render(client, create_vt_decoder(), frame_tx, client_token, 320, 240)
-            .await
+        run_client_recv_decode_render(
+            client,
+            create_vt_decoder(),
+            frame_tx,
+            client_token,
+            320,
+            240,
+        )
+        .await
     });
 
     let frames = collect_frames(&frame_rx, 1, Duration::from_secs(15));

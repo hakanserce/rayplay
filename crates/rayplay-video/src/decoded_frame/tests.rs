@@ -84,7 +84,6 @@ fn test_expected_data_size_bgra8_4k() {
 
 #[test]
 fn test_expected_data_size_nv12_1080p() {
-    // NV12: stride * height * 3 / 2 = 1920 * 1080 * 3 / 2
     let frame = DecodedFrame::new_cpu(vec![], 1920, 1080, 1920, PixelFormat::Nv12, 0);
     assert_eq!(frame.expected_data_size(), 1920 * 1080 * 3 / 2);
 }
@@ -97,51 +96,18 @@ fn test_expected_data_size_zero_dimensions() {
 
 #[test]
 fn test_expected_data_size_bgra8_stride_wider_than_width() {
-    // Hardware alignment: VideoToolbox may pad rows to e.g. 2048 for a 1920px frame.
     let frame = DecodedFrame::new_cpu(vec![], 1920, 1080, 2048 * 4, PixelFormat::Bgra8, 0);
     assert_eq!(frame.expected_data_size(), 2048 * 4 * 1080);
 }
 
 #[test]
 fn test_expected_data_size_nv12_stride_wider_than_width() {
-    // NV12 with hardware stride padding: stride=2048 for 1920px frame.
     let frame = DecodedFrame::new_cpu(vec![], 1920, 1080, 2048, PixelFormat::Nv12, 0);
     assert_eq!(frame.expected_data_size(), 2048 * 1080 * 3 / 2);
 }
 
-// ── IoSurfaceHandle (macOS only) ────────────────────────────────────────
+// ── iosurface field (cross-platform) ─────────────────────────────────────
 
-#[cfg(target_os = "macos")]
-#[test]
-fn test_iosurface_handle_debug() {
-    // Create a dummy handle using CoreFoundation's CFAllocatorGetDefault
-    // (a long-lived CF object safe to retain/release for testing).
-    unsafe extern "C" {
-        fn CFAllocatorGetDefault() -> *mut std::ffi::c_void;
-    }
-    let ptr = unsafe { CFAllocatorGetDefault() };
-    // Retain so our handle can release it.
-    unsafe { CFRetain(ptr.cast_const()) };
-    let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
-    let dbg = format!("{handle:?}");
-    assert!(dbg.contains("IoSurfaceHandle"));
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn test_iosurface_handle_clone() {
-    unsafe extern "C" {
-        fn CFAllocatorGetDefault() -> *mut std::ffi::c_void;
-    }
-    let ptr = unsafe { CFAllocatorGetDefault() };
-    unsafe { CFRetain(ptr.cast_const()) };
-    let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
-    let cloned = handle.clone();
-    assert_eq!(handle.as_ptr(), cloned.as_ptr());
-    // Both drop without double-free (each was independently retained).
-}
-
-#[cfg(target_os = "macos")]
 #[test]
 fn test_decoded_frame_new_hardware_test_stub_has_no_iosurface() {
     let frame = DecodedFrame::new_hardware_test_stub(1920, 1080, 1920, PixelFormat::Nv12, 0);
@@ -150,41 +116,62 @@ fn test_decoded_frame_new_hardware_test_stub_has_no_iosurface() {
     assert!(frame.data.is_empty());
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 fn test_decoded_frame_new_cpu_has_no_iosurface() {
     let frame = DecodedFrame::new_cpu(vec![0; 4], 1, 1, 4, PixelFormat::Bgra8, 0);
     assert!(frame.iosurface.is_none());
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn test_decoded_frame_new_hardware_stores_iosurface() {
-    unsafe extern "C" {
-        fn CFAllocatorGetDefault() -> *mut std::ffi::c_void;
-    }
-    let ptr = unsafe { CFAllocatorGetDefault() };
-    // Extra retain so the handle can release it independently.
-    unsafe { CFRetain(ptr.cast_const()) };
-    let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
-    let frame = DecodedFrame::new_hardware(64, 64, 64, PixelFormat::Nv12, 99, handle);
-    assert!(frame.is_hardware_frame);
-    assert!(frame.iosurface.is_some());
-    assert!(frame.data.is_empty());
-    assert_eq!(frame.timestamp_us, 99);
-}
+// ── IoSurfaceHandle (macOS only) ────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-#[test]
-fn test_decoded_frame_new_hardware_clone() {
+mod macos_tests {
+    use super::*;
+    use std::ffi::c_void;
+
     unsafe extern "C" {
-        fn CFAllocatorGetDefault() -> *mut std::ffi::c_void;
+        fn CFAllocatorGetDefault() -> *mut c_void;
+        fn CFRetain(cf: *const c_void) -> *const c_void;
     }
-    let ptr = unsafe { CFAllocatorGetDefault() };
-    unsafe { CFRetain(ptr.cast_const()) };
-    let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
-    let frame = DecodedFrame::new_hardware(4, 4, 4, PixelFormat::Nv12, 0, handle);
-    let cloned = frame.clone();
-    assert!(cloned.iosurface.is_some());
-    assert_eq!(cloned.width, 4);
+
+    #[test]
+    fn test_iosurface_handle_debug() {
+        let ptr = unsafe { CFAllocatorGetDefault() };
+        unsafe { CFRetain(ptr.cast_const()) };
+        let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
+        let dbg = format!("{handle:?}");
+        assert!(dbg.contains("IoSurfaceHandle"));
+    }
+
+    #[test]
+    fn test_iosurface_handle_clone() {
+        let ptr = unsafe { CFAllocatorGetDefault() };
+        unsafe { CFRetain(ptr.cast_const()) };
+        let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
+        let cloned = handle.clone();
+        assert_eq!(handle.as_ptr(), cloned.as_ptr());
+    }
+
+    #[test]
+    fn test_decoded_frame_new_hardware_stores_iosurface() {
+        let ptr = unsafe { CFAllocatorGetDefault() };
+        unsafe { CFRetain(ptr.cast_const()) };
+        let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
+        let frame = DecodedFrame::new_hardware(64, 64, 64, PixelFormat::Nv12, 99, handle);
+        assert!(frame.is_hardware_frame);
+        assert!(frame.iosurface.is_some());
+        assert!(frame.data.is_empty());
+        assert_eq!(frame.timestamp_us, 99);
+    }
+
+    #[test]
+    fn test_decoded_frame_new_hardware_clone() {
+        let ptr = unsafe { CFAllocatorGetDefault() };
+        unsafe { CFRetain(ptr.cast_const()) };
+        let handle = unsafe { IoSurfaceHandle::from_retained(ptr) };
+        let frame = DecodedFrame::new_hardware(4, 4, 4, PixelFormat::Nv12, 0, handle);
+        let cloned = frame.clone();
+        assert!(cloned.iosurface.is_some());
+        assert_eq!(cloned.width, 4);
+    }
 }

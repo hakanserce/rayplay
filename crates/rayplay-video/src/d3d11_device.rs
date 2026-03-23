@@ -5,6 +5,11 @@
 /// This is required for zero-copy encoding: NVENC must register textures
 /// that belong to the same D3D11 device used by Desktop Duplication.
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::default_trait_access,
+    clippy::borrow_as_ptr,
+    clippy::must_use_candidate
+)]
 mod inner {
     use std::ffi::c_void;
 
