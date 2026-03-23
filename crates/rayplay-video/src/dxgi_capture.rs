@@ -8,6 +8,11 @@
 /// - **Zero-copy** ([`ZeroCopyCapturer`]): returns the GPU texture pointer
 ///   directly for NVENC to consume (ADR-001 Option B).
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::default_trait_access,
+    clippy::borrow_as_ptr,
+    clippy::cast_sign_loss
+)]
 mod inner {
     use std::cell::Cell;
     use std::ffi::c_void;
