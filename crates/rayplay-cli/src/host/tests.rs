@@ -900,9 +900,9 @@ async fn test_layer4_stream_with_pipeline_encode_thread_panic_propagates_as_erro
     assert!(result.unwrap_err().to_string().contains("panicked"));
 }
 
-// ── stream (non-Windows stub) ────────────────────────────────────────────
+// ── stream (non-Windows/non-macOS stub) ──────────────────────────────────
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tokio::test]
 async fn test_stream_returns_unsupported_error_on_non_windows() {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -923,7 +923,7 @@ async fn test_stream_returns_unsupported_error_on_non_windows() {
     );
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tokio::test]
 async fn test_serve_continues_after_non_windows_stream_error() {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();

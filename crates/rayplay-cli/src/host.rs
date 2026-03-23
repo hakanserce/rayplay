@@ -415,9 +415,23 @@ pub(crate) async fn stream(
     stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
 }
 
-/// Non-Windows streaming path — uses the software fallback pipeline
+/// Non-Windows streaming path — delegates to platform-specific modules.
+///
+/// On macOS, uses [`host_capture_macos`](crate::host_capture_macos) which
+/// checks Screen Recording permission and captures via ScreenCaptureKit.
+/// On other non-Windows platforms, uses the software fallback pipeline.
+#[cfg(target_os = "macos")]
+pub(crate) async fn stream(
+    transport: QuicVideoTransport,
+    config: HostConfig,
+    token: CancellationToken,
+) -> Result<()> {
+    crate::host_capture_macos::stream(transport, config, token).await
+}
+
+/// Non-Windows/non-macOS streaming path — uses the software fallback pipeline
 /// (scrap capturer + openh264/ffmpeg encoder) via the factory functions.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) async fn stream(
     transport: QuicVideoTransport,
     config: HostConfig,
