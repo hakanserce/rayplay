@@ -38,7 +38,12 @@ pub fn create_capturer(
         let device = Arc::new(SharedD3D11Device::new()?);
         DxgiCapture::new(config, device).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        use crate::sck_capture::SckCapturer;
+        SckCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         #[cfg(feature = "fallback")]
         {
@@ -57,14 +62,16 @@ pub fn create_capturer(
 mod tests {
     use super::*;
 
-    #[cfg(all(not(target_os = "windows"), not(feature = "fallback")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(feature = "fallback"))]
     #[test]
     fn test_create_capturer_unsupported_on_non_windows() {
         let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);
         assert!(matches!(result, Err(CaptureError::UnsupportedPlatform)));
     }
 
-    #[cfg(all(not(target_os = "windows"), feature = "fallback"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(feature = "fallback")]
     #[test]
     fn test_create_capturer_returns_scrap_on_non_windows_with_fallback() {
         let result = create_capturer(CaptureConfig::default(), PipelineMode::Auto);

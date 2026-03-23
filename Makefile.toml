@@ -69,12 +69,12 @@ args = ["fmt", "--all"]
 clear = true
 description = "Coverage check — fails if line coverage drops below 96%"
 command = "cargo"
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "96", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs"]
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "96", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs"]
 
 [tasks.coverage-html]
 description = "Generate LLVM coverage report (HTML, opens browser)"
 script = [
-    '''cargo llvm-cov --workspace --html --ignore-filename-regex "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs"''',
+    '''cargo llvm-cov --workspace --html --ignore-filename-regex "main\\.rs|render_window\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs"''',
     "open target/llvm-cov/html/index.html"
 ]
 

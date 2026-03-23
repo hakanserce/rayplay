@@ -139,9 +139,7 @@ pub async fn host_pairing(
 /// # Errors
 ///
 /// Returns a [`SessionError`] if the message cannot be sent.
-pub async fn client_send_pair_intent(
-    control: &mut ControlChannel,
-) -> Result<(), SessionError> {
+pub async fn client_send_pair_intent(control: &mut ControlChannel) -> Result<(), SessionError> {
     control
         .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
         .await

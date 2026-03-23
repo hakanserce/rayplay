@@ -30,6 +30,10 @@ pub mod packet;
 pub mod pipeline_mode;
 pub mod render_window;
 pub mod renderer;
+#[cfg(target_os = "macos")]
+pub(crate) mod sck_capture;
+#[cfg(target_os = "macos")]
+pub mod screen_permission_macos;
 pub mod videotoolbox;
 #[cfg(target_os = "macos")]
 mod wgpu_iosurface;

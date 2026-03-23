@@ -1,6 +1,8 @@
 //! `rayhost` binary — entry point for the `RayPlay` host streaming server (UC-006, UC-008, UC-016).
 
 mod host;
+#[cfg(target_os = "macos")]
+mod host_capture_macos;
 mod host_pairing_glue;
 
 use std::sync::Arc;
