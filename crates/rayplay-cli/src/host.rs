@@ -10,7 +10,6 @@ use rayplay_video::PipelineMode;
 #[cfg(target_os = "windows")]
 use rayplay_video::encoder::GpuTextureHandle;
 use rayplay_video::encoder::{Bitrate, EncoderConfig};
-#[cfg(any(target_os = "windows", test))]
 use rayplay_video::{
     EncodedPacket,
     capture::{CaptureError, ScreenCapturer},
@@ -61,7 +60,6 @@ pub struct HostConfig {
     /// Video encoder settings derived from the CLI arguments.
     pub encoder_config: EncoderConfig,
     /// Pipeline mode (auto or forced software).
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub pipeline_mode: PipelineMode,
 }
 
@@ -174,7 +172,6 @@ pub async fn serve(
 /// - `packet_tx` is closed (receiver dropped — stream is shutting down),
 /// - a capture or encode error occurs (the error is forwarded via `packet_tx`),
 /// - or a send on `packet_tx` fails because the receiver was already dropped.
-#[cfg(any(target_os = "windows", test))]
 pub(crate) fn drive_encode_loop(
     mut capturer: Box<dyn ScreenCapturer>,
     mut encoder: Box<dyn VideoEncoder>,
@@ -224,7 +221,6 @@ pub(crate) fn drive_encode_loop(
 ///
 /// Returns an error if `transport.send_video` fails or if the encode thread
 /// signals an error via `packet_rx`.
-#[cfg(any(target_os = "windows", test))]
 async fn run_send_loop(
     mut transport: QuicVideoTransport,
     mut packet_rx: tokio::sync::mpsc::Receiver<anyhow::Result<EncodedPacket>>,
@@ -266,7 +262,6 @@ async fn run_send_loop(
 /// # Errors
 ///
 /// Returns an error if capture, encoding, or network transmission fails.
-#[cfg(any(target_os = "windows", test))]
 pub(crate) async fn stream_with_pipeline(
     transport: QuicVideoTransport,
     capturer: Box<dyn ScreenCapturer>,
@@ -420,17 +415,29 @@ pub(crate) async fn stream(
     stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
 }
 
-// The Windows version is `async`; keep the same signature here.
+/// Non-Windows streaming path — uses the software fallback pipeline
+/// (scrap capturer + openh264/ffmpeg encoder) via the factory functions.
 #[cfg(not(target_os = "windows"))]
-#[allow(clippy::unused_async)]
 pub(crate) async fn stream(
-    _transport: QuicVideoTransport,
-    _config: HostConfig,
-    _token: CancellationToken,
+    transport: QuicVideoTransport,
+    config: HostConfig,
+    token: CancellationToken,
 ) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "screen capture and NVENC encoding are only supported on Windows"
-    ))
+    use rayplay_video::{CaptureConfig, create_capturer, encoder::create_encoder};
+
+    let cap_config = CaptureConfig {
+        target_fps: config.encoder_config.fps,
+        acquire_timeout_ms: 100,
+    };
+    let capturer =
+        create_capturer(cap_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
+    let (cap_width, cap_height) = capturer.resolution();
+
+    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
+        .with_bitrate(config.encoder_config.bitrate);
+    let encoder = create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
+
+    stream_with_pipeline(transport, capturer, encoder, token).await
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
