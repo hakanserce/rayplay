@@ -154,14 +154,20 @@ fn test_video_error_not_initialized_message() {
 
 #[test]
 fn test_video_error_unsupported_codec_hevc_message() {
-    let msg = VideoError::UnsupportedCodec { codec: Codec::Hevc }.to_string();
-    assert!(msg.contains("Hevc"));
+    let msg = VideoError::UnsupportedCodec {
+        codec: "hevc".to_string(),
+    }
+    .to_string();
+    assert!(msg.contains("hevc"));
 }
 
 #[test]
 fn test_video_error_unsupported_codec_h264_message() {
-    let msg = VideoError::UnsupportedCodec { codec: Codec::H264 }.to_string();
-    assert!(msg.contains("H264"));
+    let msg = VideoError::UnsupportedCodec {
+        codec: "h264".to_string(),
+    }
+    .to_string();
+    assert!(msg.contains("h264"));
 }
 
 #[test]
@@ -309,6 +315,59 @@ fn test_codec_h264_clone() {
     let codec = Codec::H264;
     let cloned = codec.clone();
     assert_eq!(codec, cloned);
+}
+
+#[test]
+fn test_codec_display_hevc() {
+    assert_eq!(Codec::Hevc.to_string(), "hevc");
+}
+
+#[test]
+fn test_codec_display_h264() {
+    assert_eq!(Codec::H264.to_string(), "h264");
+}
+
+#[test]
+fn test_codec_from_str_hevc() {
+    let codec: Codec = "hevc".parse().unwrap();
+    assert_eq!(codec, Codec::Hevc);
+}
+
+#[test]
+fn test_codec_from_str_h264() {
+    let codec: Codec = "h264".parse().unwrap();
+    assert_eq!(codec, Codec::H264);
+}
+
+#[test]
+fn test_codec_from_str_invalid() {
+    let result: Result<Codec, _> = "vp9".parse();
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(matches!(error, VideoError::UnsupportedCodec { .. }));
+    assert!(error.to_string().contains("vp9"));
+}
+
+#[test]
+fn test_codec_from_str_empty() {
+    let result: Result<Codec, _> = "".parse();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_codec_display_from_str_round_trip_hevc() {
+    let original = Codec::Hevc;
+    let string = original.to_string();
+    let parsed: Codec = string.parse().unwrap();
+    assert_eq!(original, parsed);
+}
+
+#[test]
+fn test_codec_display_from_str_round_trip_h264() {
+    let original = Codec::H264;
+    let string = original.to_string();
+    let parsed: Codec = string.parse().unwrap();
+    assert_eq!(original, parsed);
 }
 
 // ── EncoderInput ──────────────────────────────────────────────────────────

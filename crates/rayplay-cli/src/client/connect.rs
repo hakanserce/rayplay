@@ -1,9 +1,11 @@
 //! QUIC connection setup for the `rayview` client (UC-007, UC-008).
 
-use std::{future::Future, net::SocketAddr};
+use std::{future::Future, net::SocketAddr, str::FromStr};
 
 use anyhow::Result;
-use rayplay_network::QuicVideoTransport;
+use rayplay_core::session::StreamParams;
+use rayplay_network::{QuicVideoTransport, client_handshake};
+use rayplay_video::encoder::Codec;
 use tokio_util::sync::CancellationToken;
 
 /// Connects to a `RayPlay` host and calls `on_connect` with the established transport.
@@ -117,6 +119,47 @@ where
     }
 }
 
+/// Performs codec negotiation handshake and starts decoding with the negotiated codec.
+async fn run_pipeline_with_handshake(
+    transport: QuicVideoTransport,
+    mut control: rayplay_network::ControlChannel,
+    pipeline_mode: rayplay_video::PipelineMode,
+    frame_tx: crossbeam_channel::Sender<rayplay_video::DecodedFrame>,
+    token: CancellationToken,
+) -> Result<()> {
+    use rayplay_video::create_decoder;
+
+    // Send handshake with desired params (can be placeholder since host returns actual params)
+    let desired_params = StreamParams {
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        codec: "hevc".to_string(), // preferred codec
+    };
+
+    let actual_params = client_handshake(&mut control, desired_params)
+        .await
+        .map_err(|e| anyhow::anyhow!("codec negotiation failed: {e}"))?;
+
+    // Parse the actual codec returned by the host
+    let actual_codec = Codec::from_str(&actual_params.codec)
+        .map_err(|e| anyhow::anyhow!("unsupported codec '{}': {e}", actual_params.codec))?;
+
+    tracing::info!(
+        codec = %actual_codec,
+        width = actual_params.width,
+        height = actual_params.height,
+        fps = actual_params.fps,
+        "Codec negotiation complete"
+    );
+
+    // Create decoder with the actual negotiated codec
+    let decoder = create_decoder(actual_codec, pipeline_mode)
+        .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
+
+    super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
+}
+
 /// Connects to the host in `config` and runs the full receive-decode pipeline
 /// with automatic reconnection on failure.
 ///
@@ -133,8 +176,6 @@ pub async fn connect(
     frame_tx: crossbeam_channel::Sender<rayplay_video::DecodedFrame>,
     token: CancellationToken,
 ) -> Result<()> {
-    use rayplay_video::{Codec, create_decoder};
-
     let server_addr = config.server_addr;
     let pipeline_mode = config.pipeline_mode;
     let reconnect_timeout = config.reconnect_timeout;
@@ -186,10 +227,8 @@ pub async fn connect(
             tracing::warn!("Could not extract server certificate from connection.");
         }
 
-        // After pairing, run the decode pipeline on this connection
-        let decoder = create_decoder(Codec::Hevc, pipeline_mode)
-            .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
-        super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
+        // After pairing, run the decode pipeline with codec negotiation
+        run_pipeline_with_handshake(transport, control, pipeline_mode, frame_tx, token).await
     } else {
         // Normal mode: cert-based connect with challenge-response auth
         let cert_bytes = config.load_cert_bytes()?;
@@ -207,12 +246,13 @@ pub async fn connect(
                 let frame_tx = frame_tx.clone();
                 let signing_key = signing_key.clone();
                 async move {
+                    let mut control = transport
+                        .open_control()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
+
                     // Authenticate with saved signing key if available
                     if let Some(ref key) = signing_key {
-                        let mut control = transport
-                            .open_control()
-                            .await
-                            .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
                         rayplay_network::client_auth_response(&mut control, key)
                             .await
                             .map_err(|e| anyhow::anyhow!("authentication failed: {e}"))?;
@@ -223,9 +263,9 @@ pub async fn connect(
                         );
                     }
 
-                    let decoder = create_decoder(Codec::Hevc, pipeline_mode)
-                        .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
-                    super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
+                    // Run the decode pipeline with codec negotiation
+                    run_pipeline_with_handshake(transport, control, pipeline_mode, frame_tx, child)
+                        .await
                 }
             },
         )

@@ -185,9 +185,7 @@ impl TestCertGuard {
 impl Drop for TestCertGuard {
     fn drop(&mut self) {
         // Best-effort cleanup: remove the test cert file
-        let _ =
-            rayplay_network::server_cert_store::load_server_cert(&self.host, self.port)
-                .ok();
+        let _ = rayplay_network::server_cert_store::load_server_cert(&self.host, self.port).ok();
         // We can't easily get the path from the public API, so just leave it.
         // The unique host name ensures it won't interfere with anything.
     }

@@ -5,19 +5,25 @@
 //! requires a real display.
 
 use anyhow::Result;
-use rayplay_network::QuicVideoTransport;
-use rayplay_video::encoder::EncoderConfig;
-use tokio_util::sync::CancellationToken;
+use rayplay_video::{
+    capture::ScreenCapturer,
+    encoder::{EncoderConfig, VideoEncoder},
+};
 
-use crate::host::{HostConfig, stream_with_pipeline};
+use crate::host::HostConfig;
 
-/// Checks Screen Recording permission, then creates the capture and encode
-/// pipeline and streams to the connected client.
-pub(crate) async fn stream(
-    transport: QuicVideoTransport,
-    config: HostConfig,
-    token: CancellationToken,
-) -> Result<()> {
+/// Creates the capture and encoder pipeline but does not start streaming.
+///
+/// Checks Screen Recording permission first, then initializes the capturer
+/// and encoder with the actual capture resolution.
+///
+/// # Errors
+///
+/// Returns an error if Screen Recording permission is denied, capture
+/// initialization fails, or encoder creation fails.
+pub(crate) async fn prepare_pipeline(
+    config: &HostConfig,
+) -> Result<(Box<dyn ScreenCapturer>, Box<dyn VideoEncoder>)> {
     use rayplay_video::{CaptureConfig, create_capturer, encoder::create_encoder};
 
     wait_for_screen_recording_permission().await?;
@@ -31,10 +37,10 @@ pub(crate) async fn stream(
     let (cap_width, cap_height) = capturer.resolution();
 
     let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-        .with_bitrate(config.encoder_config.bitrate);
+        .with_bitrate(config.encoder_config.bitrate.clone());
     let encoder = create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
 
-    stream_with_pipeline(transport, capturer, encoder, token).await
+    Ok((capturer, encoder))
 }
 
 /// Polls for macOS Screen Recording permission, prompting the user to grant it.

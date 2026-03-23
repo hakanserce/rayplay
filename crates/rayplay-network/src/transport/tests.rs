@@ -285,9 +285,8 @@ async fn test_peer_certificate_server_side_returns_none() {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
     let server_addr = listener.local_addr().unwrap();
-    let _client_task = tokio::spawn(async move {
-        QuicVideoTransport::connect(server_addr, cert_der).await
-    });
+    let _client_task =
+        tokio::spawn(async move { QuicVideoTransport::connect(server_addr, cert_der).await });
 
     let server = listener.accept().await.expect("accept");
     // Server side: client does not present a certificate

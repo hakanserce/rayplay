@@ -171,9 +171,7 @@ impl QuicVideoTransport {
     #[must_use]
     pub fn peer_certificate(&self) -> Option<Vec<u8>> {
         let identity = self.connection.peer_identity()?;
-        let certs = identity
-            .downcast::<Vec<CertificateDer<'static>>>()
-            .ok()?;
+        let certs = identity.downcast::<Vec<CertificateDer<'static>>>().ok()?;
         certs.first().map(|c| c.as_ref().to_vec())
     }
 

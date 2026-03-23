@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use thiserror::Error;
 
@@ -66,6 +66,29 @@ pub enum Codec {
     Hevc,
     /// H.264 / AVC — widely supported codec, hardware-accelerated on most GPUs.
     H264,
+}
+
+impl fmt::Display for Codec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Hevc => write!(f, "hevc"),
+            Self::H264 => write!(f, "h264"),
+        }
+    }
+}
+
+impl FromStr for Codec {
+    type Err = VideoError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "hevc" => Ok(Self::Hevc),
+            "h264" => Ok(Self::H264),
+            _ => Err(VideoError::UnsupportedCodec {
+                codec: s.to_string(),
+            }),
+        }
+    }
 }
 
 /// Encoder bitrate setting.
@@ -167,8 +190,8 @@ pub enum VideoError {
     #[error("encoder session not initialized")]
     NotInitialized,
 
-    #[error("unsupported codec: {codec:?}")]
-    UnsupportedCodec { codec: Codec },
+    #[error("unsupported codec: {codec}")]
+    UnsupportedCodec { codec: String },
 
     #[error("invalid frame dimensions: {width}x{height}")]
     InvalidDimensions { width: u32, height: u32 },
