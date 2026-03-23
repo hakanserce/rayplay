@@ -53,6 +53,12 @@ fallback = ["dep:scrap", "dep:openh264"]
 ## Opt-in due to FFmpeg's complex build requirements.
 ffmpeg-fallback = ["dep:ffmpeg-next", "dep:libc"]
 
+# The `objc` crate's `msg_send!` macro checks `cfg(feature = "cargo-clippy")`,
+# which is not a known feature of this crate. Tell check-cfg to expect it.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(feature, values("cargo-clippy"))']
+
 [dev-dependencies]
 criterion.workspace  = true
 serde_json.workspace = true
