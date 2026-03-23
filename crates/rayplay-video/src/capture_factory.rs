@@ -15,6 +15,16 @@ pub fn create_capturer(
     config: CaptureConfig,
     mode: PipelineMode,
 ) -> Result<Box<dyn ScreenCapturer>, CaptureError> {
+    // macOS always uses ScreenCaptureKit regardless of pipeline mode.
+    #[cfg(target_os = "macos")]
+    {
+        use crate::sck_capture::SckCapturer;
+
+        let _ = mode;
+        SckCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
+    }
+
+    #[cfg(not(target_os = "macos"))]
     if mode == PipelineMode::Software {
         #[cfg(feature = "fallback")]
         {
@@ -37,11 +47,6 @@ pub fn create_capturer(
 
         let device = Arc::new(SharedD3D11Device::new()?);
         DxgiCapture::new(config, device).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use crate::sck_capture::SckCapturer;
-        SckCapturer::new(config).map(|c| Box::new(c) as Box<dyn ScreenCapturer>)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -86,7 +91,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "fallback")]
+    #[cfg(all(
+        feature = "fallback",
+        feature = "hw-codec-tests",
+        not(target_os = "macos")
+    ))]
     #[test]
     fn test_create_capturer_software_mode_uses_scrap() {
         let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);
@@ -101,7 +110,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "fallback"))]
+    #[cfg(not(any(feature = "fallback", target_os = "macos")))]
     #[test]
     fn test_create_capturer_software_mode_unsupported_without_fallback() {
         let result = create_capturer(CaptureConfig::default(), PipelineMode::Software);

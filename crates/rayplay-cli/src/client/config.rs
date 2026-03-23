@@ -58,8 +58,12 @@ pub struct ClientArgs {
 pub struct ClientConfig {
     /// Socket address of the `RayPlay` host.
     pub server_addr: SocketAddr,
-    /// Path to the host's DER-encoded TLS certificate.
-    pub cert_path: PathBuf,
+    /// Original host string from the CLI (for cert store lookup).
+    pub host: String,
+    /// Port number from the CLI (for cert store lookup).
+    pub port: u16,
+    /// Explicit path to the host's DER-encoded TLS certificate (`--cert`).
+    pub cert_path: Option<PathBuf>,
     /// Whether to initiate PIN-based pairing (first-time connection).
     pub pair: bool,
     /// Window width in logical pixels.
@@ -70,13 +74,6 @@ pub struct ClientConfig {
     pub pipeline_mode: PipelineMode,
     /// Maximum reconnect duration (0 = infinite).
     pub reconnect_timeout: Duration,
-}
-
-/// Returns the default certificate path: `$HOME/.config/rayview/server.der`.
-fn default_cert_path() -> PathBuf {
-    std::env::var_os("HOME")
-        .map_or_else(|| PathBuf::from("."), PathBuf::from)
-        .join(".config/rayview/server.der")
 }
 
 /// Resolves a host string (IP or hostname) and port into a [`SocketAddr`].
@@ -108,7 +105,6 @@ impl ClientConfig {
     /// resolved via DNS.
     pub fn from_args(args: &ClientArgs) -> Result<Self> {
         let server_addr = resolve_host(&args.host, args.port)?;
-        let cert_path = args.cert.clone().unwrap_or_else(default_cert_path);
         let pipeline_mode = if args.software {
             PipelineMode::Software
         } else {
@@ -117,7 +113,9 @@ impl ClientConfig {
         let reconnect_timeout = Duration::from_secs(args.reconnect_timeout);
         Ok(Self {
             server_addr,
-            cert_path,
+            host: args.host.clone(),
+            port: args.port,
+            cert_path: args.cert.clone(),
             pair: args.pair,
             width: args.width,
             height: args.height,
@@ -128,16 +126,36 @@ impl ClientConfig {
 
     /// Reads the server's TLS certificate bytes from disk.
     ///
+    /// Checks in order:
+    /// 1. Explicit `--cert` path if provided
+    /// 2. Host-specific cert saved during pairing
+    ///
     /// # Errors
     ///
-    /// Returns an error if the certificate file cannot be read.
+    /// Returns an error if no certificate can be found.
     pub fn load_cert_bytes(&self) -> Result<Vec<u8>> {
-        std::fs::read(&self.cert_path).with_context(|| {
-            format!(
-                "failed to read server certificate from '{}'",
-                self.cert_path.display()
-            )
-        })
+        // 1. Explicit --cert path takes priority
+        if let Some(ref path) = self.cert_path {
+            return std::fs::read(path).with_context(|| {
+                format!(
+                    "failed to read server certificate from '{}'",
+                    path.display()
+                )
+            });
+        }
+
+        // 2. Check host-specific cert saved during pairing
+        if let Ok(Some(cert)) =
+            rayplay_network::server_cert_store::load_server_cert(&self.host, self.port)
+        {
+            return Ok(cert);
+        }
+
+        anyhow::bail!(
+            "no server certificate found for {}:{}. Run with --pair first, or provide --cert <path>",
+            self.host,
+            self.port
+        )
     }
 }
 

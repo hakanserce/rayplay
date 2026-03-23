@@ -35,8 +35,7 @@ impl SCStreamOutputTrait for FrameHandler {
 
         // Non-blocking send — drop the frame if the consumer is behind.
         match self.tx.try_send(data) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {}
+            Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
         }
     }
 }
@@ -65,10 +64,8 @@ impl SckCapturer {
             .first()
             .ok_or_else(|| CaptureError::InitializationFailed("no display found".to_string()))?;
 
-        #[allow(clippy::cast_sign_loss)]
-        let width = display.width() as u32;
-        #[allow(clippy::cast_sign_loss)]
-        let height = display.height() as u32;
+        let width = display.width();
+        let height = display.height();
 
         let stream_config = SCStreamConfiguration::new()
             .with_width(display.width())

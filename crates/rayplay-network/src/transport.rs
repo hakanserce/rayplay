@@ -164,6 +164,19 @@ impl QuicVideoTransport {
         Ok(Self::from_connection(connection))
     }
 
+    /// Returns the DER-encoded certificate of the connected peer, if available.
+    ///
+    /// For a client connection this is the server's TLS certificate.
+    /// Returns `None` if the peer did not present a certificate.
+    #[must_use]
+    pub fn peer_certificate(&self) -> Option<Vec<u8>> {
+        let identity = self.connection.peer_identity()?;
+        let certs = identity
+            .downcast::<Vec<CertificateDer<'static>>>()
+            .ok()?;
+        certs.first().map(|c| c.as_ref().to_vec())
+    }
+
     /// Wraps an existing [`Connection`] with default fragmenter and reassembler.
     pub(crate) fn from_connection(connection: Connection) -> Self {
         Self {
