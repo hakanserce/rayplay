@@ -154,3 +154,115 @@ fn test_openh264_encoder_rejects_odd_height() {
         }
     ));
 }
+
+// ── NAL unit parsing tests ─────────────────────────────────────────────
+
+#[test]
+fn test_split_h264_nal_units_empty() {
+    assert!(split_h264_nal_units(&[]).is_empty());
+}
+
+#[test]
+fn test_split_h264_nal_units_single_nal() {
+    let data = [0x00u8, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00];
+    let nals = split_h264_nal_units(&data);
+    assert_eq!(nals.len(), 1);
+    assert_eq!(nals[0], &[0x67, 0x42, 0x00]);
+}
+
+#[test]
+fn test_split_h264_nal_units_multiple_nals() {
+    let data = [
+        0x00u8, 0x00, 0x00, 0x01, 0x67, 0x42, // SPS
+        0x00, 0x00, 0x00, 0x01, 0x68, 0x01, // PPS
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, // IDR slice
+    ];
+    let nals = split_h264_nal_units(&data);
+    assert_eq!(nals.len(), 3);
+    assert_eq!(nals[0], &[0x67, 0x42]);
+    assert_eq!(nals[1], &[0x68, 0x01]);
+    assert_eq!(nals[2], &[0x65, 0x88]);
+}
+
+#[test]
+fn test_split_h264_nal_units_3byte_start_codes() {
+    let data = [
+        0x00u8, 0x00, 0x01, 0x67, 0x42, // SPS
+        0x00, 0x00, 0x01, 0x65, 0x88, // IDR slice
+    ];
+    let nals = split_h264_nal_units(&data);
+    assert_eq!(nals.len(), 2);
+    assert_eq!(nals[0], &[0x67, 0x42]);
+    assert_eq!(nals[1], &[0x65, 0x88]);
+}
+
+#[test]
+fn test_split_h264_nal_units_no_start_codes() {
+    let data = [0x67u8, 0x42, 0x00, 0x1f];
+    assert!(split_h264_nal_units(&data).is_empty());
+}
+
+// ── Keyframe detection tests ───────────────────────────────────────────
+
+#[test]
+fn test_is_h264_keyframe_with_idr_slice() {
+    let data = [
+        0x00u8, 0x00, 0x00, 0x01, 0x67, 0x42, // SPS (NAL type 7)
+        0x00, 0x00, 0x00, 0x01, 0x68, 0x01, // PPS (NAL type 8)
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, // IDR slice (NAL type 5)
+    ];
+    assert!(is_h264_keyframe(&data));
+}
+
+#[test]
+fn test_is_h264_keyframe_without_idr_slice() {
+    let data = [
+        0x00u8, 0x00, 0x00, 0x01, 0x67, 0x42, // SPS (NAL type 7)
+        0x00, 0x00, 0x00, 0x01, 0x68, 0x01, // PPS (NAL type 8)
+        0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, // P-slice (NAL type 1)
+    ];
+    assert!(!is_h264_keyframe(&data));
+}
+
+#[test]
+fn test_is_h264_keyframe_only_idr_slice() {
+    let data = [0x00u8, 0x00, 0x00, 0x01, 0x65, 0x88]; // IDR slice (NAL type 5)
+    assert!(is_h264_keyframe(&data));
+}
+
+#[test]
+fn test_is_h264_keyframe_empty_data() {
+    assert!(!is_h264_keyframe(&[]));
+}
+
+#[test]
+fn test_is_h264_keyframe_no_valid_nals() {
+    let data = [0x67u8, 0x42, 0x00]; // No start codes
+    assert!(!is_h264_keyframe(&data));
+}
+
+#[test]
+fn test_is_h264_keyframe_empty_nal() {
+    let data = [0x00u8, 0x00, 0x00, 0x01]; // Start code but no NAL data
+    assert!(!is_h264_keyframe(&data));
+}
+
+// ── Integration test: keyframe detection in actual encoding ────────────
+
+#[test]
+fn test_openh264_encoder_keyframe_detection() {
+    let mut enc = OpenH264Encoder::new(make_config(64, 64, 30)).unwrap();
+    let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 1000);
+
+    // First frame should be a keyframe
+    let result = enc.encode(EncoderInput::Cpu(&frame)).unwrap();
+    assert!(result.is_some());
+    let packet = result.unwrap();
+
+    // Verify that keyframe detection works on the actual encoded data
+    let is_keyframe_detected = is_h264_keyframe(&packet.data);
+    assert_eq!(
+        packet.is_keyframe, is_keyframe_detected,
+        "EncodedPacket.is_keyframe should match actual bitstream analysis"
+    );
+}

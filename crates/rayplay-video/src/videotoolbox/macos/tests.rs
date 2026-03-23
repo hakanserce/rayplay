@@ -213,6 +213,9 @@ fn test_vt_decoder_decode_h264_keyframe_no_param_sets_returns_corrupt_packet() {
     assert!(err.to_string().contains("H.264 parameter sets"));
 }
 
+// ── Hardware-specific tests (require hw-codec-tests feature) ───────────
+
+#[cfg(feature = "hw-codec-tests")]
 #[test]
 fn test_vt_decoder_decode_hevc_keyframe_with_param_sets_returns_decoding_failed() {
     let mut dec = VtDecoder::new(Codec::Hevc).unwrap();
@@ -224,14 +227,11 @@ fn test_vt_decoder_decode_hevc_keyframe_with_param_sets_returns_decoding_failed(
     ];
     let packet = EncodedPacket::new(packet_data, true, 0, 16_667);
     let err = dec.decode(&packet).unwrap_err();
-    // Either CMVideoFormatDescriptionCreate fails (hw build) or
-    // we hit the non-hw fallback error (non-hw build).
-    assert!(matches!(
-        err,
-        VideoError::DecodingFailed { .. } | VideoError::CorruptPacket { .. }
-    ));
+    // CMVideoFormatDescriptionCreate will fail with invalid SPS data.
+    assert!(matches!(err, VideoError::DecodingFailed { .. }));
 }
 
+#[cfg(feature = "hw-codec-tests")]
 #[test]
 fn test_vt_decoder_decode_h264_keyframe_with_param_sets_returns_decoding_failed() {
     let mut dec = VtDecoder::new(Codec::H264).unwrap();
@@ -242,12 +242,8 @@ fn test_vt_decoder_decode_h264_keyframe_with_param_sets_returns_decoding_failed(
     ];
     let packet = EncodedPacket::new(packet_data, true, 0, 16_667);
     let err = dec.decode(&packet).unwrap_err();
-    // Either CMVideoFormatDescriptionCreate fails (hw build) or
-    // we hit the non-hw fallback error (non-hw build).
-    assert!(matches!(
-        err,
-        VideoError::DecodingFailed { .. } | VideoError::CorruptPacket { .. }
-    ));
+    // CMVideoFormatDescriptionCreate will fail with invalid SPS data.
+    assert!(matches!(err, VideoError::DecodingFailed { .. }));
 }
 
 #[test]
