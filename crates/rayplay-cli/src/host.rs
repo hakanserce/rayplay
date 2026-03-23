@@ -394,6 +394,7 @@ pub(crate) async fn stream_with_zero_copy_pipeline(
 ///
 /// Returns an error if capture initialization fails or encoder creation fails.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[allow(clippy::unused_async)] // must match macOS signature for cfg dispatch
 pub(crate) async fn prepare_pipeline(
     config: &HostConfig,
 ) -> Result<(Box<dyn ScreenCapturer>, Box<dyn VideoEncoder>)> {
