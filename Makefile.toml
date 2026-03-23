@@ -31,7 +31,7 @@ args = ["test", "--workspace"]
 [tasks.lint]
 description = "Run clippy with pedantic warnings across all crates"
 command = "cargo"
-args = ["clippy", "--workspace", "--", "-W", "clippy::pedantic"]
+args = ["clippy", "--workspace", "--", "-D", "warnings", "-W", "clippy::pedantic"]
 
 [tasks.fmt]
 description = "Check formatting across all crates"
