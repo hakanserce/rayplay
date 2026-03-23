@@ -299,6 +299,7 @@ pub(crate) async fn stream_with_pipeline(
 /// as [`EncoderInput::GpuTexture`], and sends resulting packets over `packet_tx`.
 /// The DXGI frame is released after encoding completes.
 #[cfg(target_os = "windows")]
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn drive_zero_copy_encode_loop(
     capturer: impl rayplay_video::capture::ZeroCopyCapturer,
     mut encoder: impl rayplay_video::encoder::VideoEncoder,
@@ -306,6 +307,14 @@ pub(crate) fn drive_zero_copy_encode_loop(
     session_start: std::time::Instant,
 ) {
     use rayplay_video::capture::CaptureError;
+
+    // RAII guard ensures `release_frame` is called even if `encode` panics.
+    struct FrameGuard<'c, C: rayplay_video::capture::ZeroCopyCapturer>(&'c C);
+    impl<C: rayplay_video::capture::ZeroCopyCapturer> Drop for FrameGuard<'_, C> {
+        fn drop(&mut self) {
+            self.0.release_frame();
+        }
+    }
 
     loop {
         let texture = match capturer.acquire_texture() {
@@ -325,13 +334,6 @@ pub(crate) fn drive_zero_copy_encode_loop(
         let ts = u64::try_from(session_start.elapsed().as_micros()).unwrap_or(u64::MAX);
         tracing::debug!(timestamp_us = ts, "zero_copy_frame_captured");
 
-        // RAII guard ensures `release_frame` is called even if `encode` panics.
-        struct FrameGuard<'c, C: rayplay_video::capture::ZeroCopyCapturer>(&'c C);
-        impl<C: rayplay_video::capture::ZeroCopyCapturer> Drop for FrameGuard<'_, C> {
-            fn drop(&mut self) {
-                self.0.release_frame();
-            }
-        }
         let _guard = FrameGuard(&capturer);
 
         let input = EncoderInput::GpuTexture {

@@ -1,7 +1,7 @@
-//! Software video encoder using FFmpeg via the `ffmpeg-next` crate.
+//! Software video encoder using `FFmpeg` via the `ffmpeg-next` crate.
 //!
 //! Supports both H.264 (`libx264`) and HEVC (`libx265`), providing broader
-//! codec coverage than the OpenH264 fallback.  Gated behind the
+//! codec coverage than the `OpenH264` fallback.  Gated behind the
 //! `ffmpeg-fallback` Cargo feature.
 
 use ffmpeg_next::codec::{self, Id};
@@ -13,7 +13,7 @@ use ffmpeg_next::{Dictionary, Rational, frame};
 use crate::encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError};
 use crate::packet::EncodedPacket;
 
-/// Software video encoder backed by FFmpeg (`libx264` / `libx265`).
+/// Software video encoder backed by `FFmpeg` (`libx264` / `libx265`).
 pub struct FfmpegEncoder {
     encoder: VideoEnc,
     scaler: scaling::Context,
@@ -41,7 +41,7 @@ impl FfmpegEncoder {
     /// # Errors
     ///
     /// Returns [`VideoError::InvalidDimensions`] if width or height is odd,
-    /// or [`VideoError::EncodingFailed`] if the FFmpeg encoder cannot be opened.
+    /// or [`VideoError::EncodingFailed`] if the `FFmpeg` encoder cannot be opened.
     pub fn new(config: EncoderConfig) -> Result<Self, VideoError> {
         if !config.width.is_multiple_of(2) || !config.height.is_multiple_of(2) {
             return Err(VideoError::InvalidDimensions {

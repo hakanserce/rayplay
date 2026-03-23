@@ -1,7 +1,7 @@
-//! Software video decoder using FFmpeg via the `ffmpeg-next` crate.
+//! Software video decoder using `FFmpeg` via the `ffmpeg-next` crate.
 //!
 //! Supports both H.264 and HEVC decoding, providing broader codec coverage
-//! than the OpenH264 fallback (H.264 only).  Gated behind the
+//! than the `OpenH264` fallback (H.264 only).  Gated behind the
 //! `ffmpeg-fallback` Cargo feature.
 
 use ffmpeg_next::codec::{self, Id};
@@ -15,7 +15,7 @@ use crate::decoder::VideoDecoder;
 use crate::encoder::{Codec, VideoError};
 use crate::packet::EncodedPacket;
 
-/// Software video decoder backed by FFmpeg (H.264 + HEVC).
+/// Software video decoder backed by `FFmpeg` (H.264 + HEVC).
 pub struct FfmpegDecoder {
     decoder: VideoDec,
     scaler: Option<scaling::Context>,
@@ -42,7 +42,7 @@ impl FfmpegDecoder {
     ///
     /// # Errors
     ///
-    /// Returns [`VideoError::DecodingFailed`] if the FFmpeg decoder cannot be
+    /// Returns [`VideoError::DecodingFailed`] if the `FFmpeg` decoder cannot be
     /// initialized.
     pub fn new(codec: Codec) -> Result<Self, VideoError> {
         // FFmpeg must be initialized before any decoder operations
@@ -63,7 +63,7 @@ impl FfmpegDecoder {
         let decoder = codec::context::Context::new()
             .decoder()
             .open_as(ff_codec)
-            .and_then(|o| o.video())
+            .and_then(ffmpeg_next::decoder::Opened::video)
             .map_err(|e| VideoError::DecodingFailed {
                 reason: format!("FFmpeg decoder context creation failed: {e}"),
             })?;
