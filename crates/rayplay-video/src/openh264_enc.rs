@@ -34,7 +34,7 @@ impl OpenH264Encoder {
     pub fn new(config: EncoderConfig) -> Result<Self, VideoError> {
         if config.codec != Codec::H264 {
             return Err(VideoError::UnsupportedCodec {
-                codec: config.codec,
+                codec: config.codec.to_string(),
             });
         }
 

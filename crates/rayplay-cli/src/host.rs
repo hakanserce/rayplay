@@ -385,59 +385,18 @@ pub(crate) async fn stream_with_zero_copy_pipeline(
     result
 }
 
-/// Resolves platform-specific capture and encoder then calls
-/// [`stream_with_zero_copy_pipeline`] for the zero-copy GPU path.
-#[cfg(target_os = "windows")]
-pub(crate) async fn stream(
-    transport: QuicVideoTransport,
-    config: HostConfig,
-    token: CancellationToken,
-) -> Result<()> {
-    use std::sync::Arc;
-
-    use rayplay_video::{
-        CaptureConfig, SharedD3D11Device, capture::ZeroCopyCapturer, dxgi_capture::DxgiCapture,
-        nvenc::NvencEncoder,
-    };
-
-    let device = Arc::new(SharedD3D11Device::new().map_err(anyhow::Error::from)?);
-
-    let cap_config = CaptureConfig {
-        target_fps: config.encoder_config.fps,
-        acquire_timeout_ms: 100,
-    };
-    let capturer = DxgiCapture::new(cap_config, device.clone()).map_err(anyhow::Error::from)?;
-    let (cap_width, cap_height) = <DxgiCapture as ZeroCopyCapturer>::resolution(&capturer);
-
-    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-        .with_bitrate(config.encoder_config.bitrate);
-    let encoder = NvencEncoder::new(enc_config).map_err(anyhow::Error::from)?;
-
-    stream_with_zero_copy_pipeline(transport, capturer, encoder, token).await
-}
-
-/// Non-Windows streaming path — delegates to platform-specific modules.
+/// Creates the capture and encoder pipeline but does not start streaming.
 ///
-/// On macOS, uses [`host_capture_macos`](crate::host_capture_macos) which
-/// checks Screen Recording permission and captures via `ScreenCaptureKit`.
-/// On other non-Windows platforms, uses the software fallback pipeline.
-#[cfg(target_os = "macos")]
-pub(crate) async fn stream(
-    transport: QuicVideoTransport,
-    config: HostConfig,
-    token: CancellationToken,
-) -> Result<()> {
-    crate::host_capture_macos::stream(transport, config, token).await
-}
-
-/// Non-Windows/non-macOS streaming path — uses the software fallback pipeline
-/// (scrap capturer + openh264/ffmpeg encoder) via the factory functions.
+/// Initializes the capturer and encoder with the actual capture resolution
+/// for the software fallback pipeline.
+///
+/// # Errors
+///
+/// Returns an error if capture initialization fails or encoder creation fails.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub(crate) async fn stream(
-    transport: QuicVideoTransport,
-    config: HostConfig,
-    token: CancellationToken,
-) -> Result<()> {
+pub(crate) async fn prepare_pipeline(
+    config: &HostConfig,
+) -> Result<(Box<dyn ScreenCapturer>, Box<dyn VideoEncoder>)> {
     use rayplay_video::{CaptureConfig, create_capturer, encoder::create_encoder};
 
     let cap_config = CaptureConfig {
@@ -449,10 +408,10 @@ pub(crate) async fn stream(
     let (cap_width, cap_height) = capturer.resolution();
 
     let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-        .with_bitrate(config.encoder_config.bitrate);
+        .with_bitrate(config.encoder_config.bitrate.clone());
     let encoder = create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
 
-    stream_with_pipeline(transport, capturer, encoder, token).await
+    Ok((capturer, encoder))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

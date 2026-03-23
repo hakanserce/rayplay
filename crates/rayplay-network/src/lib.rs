@@ -11,7 +11,6 @@
 //! ```
 
 pub mod client_key_store;
-pub mod server_cert_store;
 pub mod control;
 pub mod fragmenter;
 pub mod handshake;
@@ -19,6 +18,7 @@ pub mod keepalive;
 pub mod pairing;
 pub(crate) mod platform_dirs;
 pub mod reassembler;
+pub mod server_cert_store;
 pub mod transport;
 pub(crate) mod transport_tls;
 pub mod trust_store;
