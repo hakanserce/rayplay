@@ -112,7 +112,7 @@ jobs:
           components: clippy
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev pkg-config clang
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev libx264-dev libx265-dev pkg-config clang
 
       - name: Cache cargo dependencies
         uses: actions/cache@v5

@@ -111,7 +111,7 @@ fn bench_expected_data_size(c: &mut Criterion) {
 
 /// Creates a headless `wgpu` device backed by the default high-performance
 /// adapter (Metal on macOS).  No window or display server is required.
-fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
+fn try_create_headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..Default::default()
@@ -123,12 +123,11 @@ fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await
-            .expect("no GPU adapter available");
+            .await?;
         adapter
             .request_device(&wgpu::DeviceDescriptor::default(), None)
             .await
-            .expect("device creation failed")
+            .ok()
     })
 }
 
@@ -137,13 +136,20 @@ fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
 /// before the next frame can be started — the dominant component of AC-2's
 /// <2 ms target (GPU execution is pipelined and overlaps with the CPU path).
 fn bench_present_frame_bgra(c: &mut Criterion) {
+    let Some((device, queue)) = try_create_headless_device() else {
+        eprintln!("No GPU adapter available — skipping present_frame/bgra benchmarks");
+        return;
+    };
+    // Verify GPU is usable, then drop the initial device; each bench iteration creates its own.
+    drop((device, queue));
+
     let mut group = c.benchmark_group("present_frame");
 
     for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
         let bytes = (w * h * 4) as u64;
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("bgra", label), &(w, h), |b, &(w, h)| {
-            let (device, queue) = create_headless_device();
+            let (device, queue) = try_create_headless_device().expect("GPU was available above");
             let mut renderer = WgpuRenderer::new_offscreen(device, queue, w, h);
             let frame = make_bgra_frame(w, h);
             b.iter(|| renderer.present_frame(black_box(&frame)).unwrap());
@@ -154,13 +160,19 @@ fn bench_present_frame_bgra(c: &mut Criterion) {
 }
 
 fn bench_present_frame_nv12(c: &mut Criterion) {
+    let Some((device, queue)) = try_create_headless_device() else {
+        eprintln!("No GPU adapter available — skipping present_frame/nv12 benchmarks");
+        return;
+    };
+    drop((device, queue));
+
     let mut group = c.benchmark_group("present_frame");
 
     for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
         let bytes = (w * h * 3 / 2) as u64;
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("nv12", label), &(w, h), |b, &(w, h)| {
-            let (device, queue) = create_headless_device();
+            let (device, queue) = try_create_headless_device().expect("GPU was available above");
             let mut renderer = WgpuRenderer::new_offscreen(device, queue, w, h);
             let frame = make_nv12_frame(w, h);
             b.iter(|| renderer.present_frame(black_box(&frame)).unwrap());

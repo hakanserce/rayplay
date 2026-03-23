@@ -172,6 +172,7 @@ fn test_nv12_shader_has_yuv_conversion() {
 // ── RendererOutput::surface_format ────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_offscreen_surface_format_is_rgba8() {
     let (device, queue) = create_headless_device();
     let r = WgpuRenderer::new_offscreen(device, queue, 64, 64);
@@ -185,11 +186,13 @@ fn test_offscreen_surface_format_is_rgba8() {
 // ── new_offscreen construction ────────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_new_offscreen_creates_renderer() {
     let _r = make_offscreen(64, 64);
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_new_offscreen_zero_dimensions_clamped_to_one() {
     let (device, queue) = create_headless_device();
     let r = WgpuRenderer::new_offscreen(device, queue, 0, 0);
@@ -203,6 +206,7 @@ fn test_new_offscreen_zero_dimensions_clamped_to_one() {
 // ── texture_matches ───────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_texture_matches_false_when_no_cache() {
     let r = make_offscreen(64, 64);
     let frame = make_bgra_frame(64, 64);
@@ -210,6 +214,7 @@ fn test_texture_matches_false_when_no_cache() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_texture_matches_true_after_present_bgra() {
     let mut r = make_offscreen(64, 64);
     let frame = make_bgra_frame(64, 64);
@@ -218,6 +223,7 @@ fn test_texture_matches_true_after_present_bgra() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_texture_matches_true_after_present_nv12() {
     let mut r = make_offscreen(64, 64);
     let frame = make_nv12_frame(64, 64);
@@ -226,6 +232,7 @@ fn test_texture_matches_true_after_present_nv12() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_texture_matches_false_when_dimensions_change() {
     let mut r = make_offscreen(128, 128);
     let frame_a = make_bgra_frame(64, 64);
@@ -235,6 +242,7 @@ fn test_texture_matches_false_when_dimensions_change() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_texture_matches_false_when_format_changes() {
     let mut r = make_offscreen(64, 64);
     let bgra = make_bgra_frame(64, 64);
@@ -246,6 +254,7 @@ fn test_texture_matches_false_when_format_changes() {
 // ── present_frame (offscreen path) ────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_bgra_frame_succeeds() {
     let mut r = make_offscreen(64, 64);
     let frame = make_bgra_frame(64, 64);
@@ -253,6 +262,7 @@ fn test_present_bgra_frame_succeeds() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_nv12_frame_succeeds() {
     let mut r = make_offscreen(64, 64);
     let frame = make_nv12_frame(64, 64);
@@ -260,6 +270,7 @@ fn test_present_nv12_frame_succeeds() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_multiple_bgra_frames_reuses_cache() {
     let mut r = make_offscreen(64, 64);
     let frame = make_bgra_frame(64, 64);
@@ -270,6 +281,7 @@ fn test_present_multiple_bgra_frames_reuses_cache() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_bgra_then_nv12_recreates_cache() {
     let mut r = make_offscreen(64, 64);
     let bgra = make_bgra_frame(64, 64);
@@ -280,6 +292,7 @@ fn test_present_bgra_then_nv12_recreates_cache() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_frame_1080p_bgra() {
     let mut r = make_offscreen(1920, 1080);
     let frame = make_bgra_frame(1920, 1080);
@@ -289,6 +302,7 @@ fn test_present_frame_1080p_bgra() {
 // ── resize (offscreen — no-op) ────────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_resize_offscreen_is_noop() {
     let mut r = make_offscreen(64, 64);
     // Should not panic or error
@@ -298,6 +312,7 @@ fn test_resize_offscreen_is_noop() {
 // ── build_bgra_pipeline / build_nv12_pipeline ─────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_bgra_pipeline_compiles() {
     let (device, _queue) = create_headless_device();
     let (_bgl, _pipeline) =
@@ -305,6 +320,7 @@ fn test_bgra_pipeline_compiles() {
 }
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_nv12_pipeline_compiles() {
     let (device, _queue) = create_headless_device();
     let (_nv12_bgl, _pipeline) =
@@ -314,6 +330,7 @@ fn test_nv12_pipeline_compiles() {
 // ── upload_frame with no cache ────────────────────────────────────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_upload_frame_no_op_when_no_cache() {
     // With texture_cache == None, upload_frame must hit the `_ => {}` arm without panicking.
     let r = make_offscreen(64, 64);
@@ -324,6 +341,7 @@ fn test_upload_frame_no_op_when_no_cache() {
 // ── present_frame: hardware frame fallback (no IOSurface) ───────────────
 
 #[test]
+#[ignore = "requires GPU adapter"]
 fn test_present_hardware_frame_without_iosurface_succeeds() {
     let mut r = make_offscreen(64, 64);
     let frame = DecodedFrame::new_hardware_test_stub(64, 64, 64, PixelFormat::Nv12, 0);

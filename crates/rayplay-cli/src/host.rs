@@ -60,6 +60,7 @@ pub struct HostConfig {
     /// Video encoder settings derived from the CLI arguments.
     pub encoder_config: EncoderConfig,
     /// Pipeline mode (auto or forced software).
+    #[allow(dead_code)] // read on non-Windows platforms only
     pub pipeline_mode: PipelineMode,
 }
 
@@ -172,6 +173,7 @@ pub async fn serve(
 /// - `packet_tx` is closed (receiver dropped — stream is shutting down),
 /// - a capture or encode error occurs (the error is forwarded via `packet_tx`),
 /// - or a send on `packet_tx` fails because the receiver was already dropped.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 #[allow(clippy::needless_pass_by_value)] // takes ownership to drop sender on loop exit
 pub(crate) fn drive_encode_loop(
     mut capturer: Box<dyn ScreenCapturer>,
@@ -263,6 +265,7 @@ async fn run_send_loop(
 /// # Errors
 ///
 /// Returns an error if capture, encoding, or network transmission fails.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) async fn stream_with_pipeline(
     transport: QuicVideoTransport,
     capturer: Box<dyn ScreenCapturer>,
