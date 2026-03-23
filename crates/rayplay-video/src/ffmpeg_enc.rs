@@ -50,9 +50,9 @@ impl FfmpegEncoder {
             });
         }
 
-        // Idempotent — safe to call from both encoder and decoder constructors
+        // FFmpeg must be initialized before any encoder operations
         ffmpeg_next::init().map_err(|e| VideoError::EncodingFailed {
-            reason: format!("FFmpeg init failed: {e}"),
+            reason: format!("FFmpeg initialization failed: {e}"),
         })?;
 
         let codec_id = match config.codec {
@@ -64,7 +64,7 @@ impl FfmpegEncoder {
             reason: format!("FFmpeg encoder not found for {codec_id:?}"),
         })?;
 
-        let mut ctx = codec::context::Context::new_with_codec(codec)
+        let mut ctx = codec
             .encoder()
             .video()
             .map_err(|e| VideoError::EncodingFailed {

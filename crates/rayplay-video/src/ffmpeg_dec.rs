@@ -45,9 +45,9 @@ impl FfmpegDecoder {
     /// Returns [`VideoError::DecodingFailed`] if the FFmpeg decoder cannot be
     /// initialized.
     pub fn new(codec: Codec) -> Result<Self, VideoError> {
-        // Idempotent — safe to call from both encoder and decoder constructors
+        // FFmpeg must be initialized before any decoder operations
         ffmpeg_next::init().map_err(|e| VideoError::DecodingFailed {
-            reason: format!("FFmpeg init failed: {e}"),
+            reason: format!("FFmpeg initialization failed: {e}"),
         })?;
 
         let codec_id = match codec {
@@ -60,8 +60,7 @@ impl FfmpegDecoder {
                 reason: format!("FFmpeg decoder not found for {codec_id:?}"),
             })?;
 
-        let ctx = codec::context::Context::new_with_codec(ff_codec);
-        let decoder = ctx
+        let decoder = ff_codec
             .decoder()
             .video()
             .map_err(|e| VideoError::DecodingFailed {
