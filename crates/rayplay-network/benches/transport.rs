@@ -147,7 +147,7 @@ fn bench_wire_encode_decode(c: &mut Criterion) {
             let encoded = frag.encode();
             b.iter(|| {
                 let decoded = VideoFragment::decode(black_box(&encoded));
-                black_box(decoded);
+                let _ = black_box(decoded);
             });
         });
     }

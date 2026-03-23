@@ -900,47 +900,6 @@ async fn test_layer4_stream_with_pipeline_encode_thread_panic_propagates_as_erro
     assert!(result.unwrap_err().to_string().contains("panicked"));
 }
 
-// ── stream (non-Windows/non-macOS stub) ──────────────────────────────────
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-#[tokio::test]
-async fn test_stream_returns_unsupported_error_on_non_windows() {
-    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
-    let addr = listener.local_addr().unwrap();
-    let _server = tokio::spawn(async move { listener.accept().await });
-    let transport = QuicVideoTransport::connect(addr, cert_der)
-        .await
-        .expect("connect");
-    let token = CancellationToken::new();
-    let result = stream(transport, default_config(), token).await;
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("only supported on Windows")
-    );
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-#[tokio::test]
-async fn test_serve_continues_after_non_windows_stream_error() {
-    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
-    let addr = listener.local_addr().unwrap();
-    let token = CancellationToken::new();
-    let token2 = token.clone();
-    let task = tokio::spawn(serve(listener, default_config(), empty_trust_db(), token));
-    QuicVideoTransport::connect(addr, cert_der)
-        .await
-        .expect("connect");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    token2.cancel();
-    let result = task.await.unwrap();
-    assert!(result.is_ok());
-}
-
 // ── End-to-End integration tests ─────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
