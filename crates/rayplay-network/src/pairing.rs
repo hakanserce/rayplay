@@ -130,7 +130,27 @@ pub async fn host_pairing(
     Ok(trusted_client)
 }
 
+/// Sends `ClientHello(Pair)` to declare pairing intent.
+///
+/// Call this before prompting for the PIN so the host can generate and
+/// display it.  Follow up with [`client_pairing`] once the user has
+/// entered the PIN.
+///
+/// # Errors
+///
+/// Returns a [`SessionError`] if the message cannot be sent.
+pub async fn client_send_pair_intent(
+    control: &mut ControlChannel,
+) -> Result<(), SessionError> {
+    control
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+}
+
 /// Runs the client side of the SPAKE2 pairing exchange.
+///
+/// The caller must have already sent `ClientHello(Pair)` via
+/// [`client_send_pair_intent`] before calling this function.
 ///
 /// Generates an ed25519 key pair, executes the SPAKE2 protocol with the given
 /// `pin`, and returns the signing key on success.
@@ -143,12 +163,7 @@ pub async fn client_pairing(
     control: &mut ControlChannel,
     pin: &str,
 ) -> Result<SigningKey, SessionError> {
-    // 1. Send ClientHello to declare pairing intent
-    control
-        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
-        .await?;
-
-    // 2. Generate ed25519 key pair
+    // 1. Generate ed25519 key pair
     let signing_key = SigningKey::generate(&mut rand_core::OsRng);
     let verifying_key = signing_key.verifying_key();
 
