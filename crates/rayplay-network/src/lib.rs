@@ -10,13 +10,17 @@
 //! Client: ◄──UDP── QUIC datagrams → VideoReassembler → EncodedPacket
 //! ```
 
+pub mod client_key_store;
 pub mod control;
 pub mod fragmenter;
 pub mod handshake;
 pub mod keepalive;
+pub mod pairing;
+pub(crate) mod platform_dirs;
 pub mod reassembler;
 pub mod transport;
 pub(crate) mod transport_tls;
+pub mod trust_store;
 pub mod wire;
 
 pub use control::{ControlChannel, ControlReceiver, ControlSender};
@@ -26,6 +30,7 @@ pub use keepalive::{
     DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_TIMEOUT, run_keepalive_responder,
     run_keepalive_sender,
 };
+pub use pairing::{client_auth_response, client_pairing, host_auth_challenge, host_pairing};
 pub use reassembler::VideoReassembler;
 pub use transport::{QuicListener, QuicVideoTransport};
 pub use wire::{

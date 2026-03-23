@@ -79,7 +79,10 @@ where
             Ok(()) => {
                 backoff_ms = INITIAL_BACKOFF_MS;
                 disconnect_start = None;
-                tracing::info!(state = "Reconnecting", "Disconnected from host, will reconnect");
+                tracing::info!(
+                    state = "Reconnecting",
+                    "Disconnected from host, will reconnect"
+                );
             }
             Err(e) => {
                 if token.is_cancelled() {
@@ -88,8 +91,13 @@ where
 
                 let start = *disconnect_start.get_or_insert_with(std::time::Instant::now);
                 if !reconnect_timeout.is_zero() && start.elapsed() >= reconnect_timeout {
-                    tracing::info!(state = "Disconnected", "Reconnect timeout exceeded, giving up");
-                    return Err(anyhow::anyhow!("reconnect timeout exceeded after {reconnect_timeout:?}"));
+                    tracing::info!(
+                        state = "Disconnected",
+                        "Reconnect timeout exceeded, giving up"
+                    );
+                    return Err(anyhow::anyhow!(
+                        "reconnect timeout exceeded after {reconnect_timeout:?}"
+                    ));
                 }
 
                 tracing::info!(state = "Reconnecting", error = %e, backoff_ms, "Connection failed, retrying");
@@ -112,12 +120,13 @@ where
 /// Connects to the host in `config` and runs the full receive-decode pipeline
 /// with automatic reconnection on failure.
 ///
-/// Reads the server certificate from `config.cert_path`, establishes the QUIC
-/// connection, and loops: receive → decode → forward frame.
+/// If `config.pair` is set, uses insecure TLS + SPAKE2 PIN pairing.
+/// Otherwise tries trusted-client auth with a saved key, falling back to
+/// cert-based connection.
 ///
 /// # Errors
 ///
-/// Returns an error if the certificate cannot be read.
+/// Returns an error if the certificate cannot be read or pairing fails.
 #[cfg(target_os = "macos")]
 pub async fn connect(
     config: super::config::ClientConfig,
@@ -126,211 +135,87 @@ pub async fn connect(
 ) -> Result<()> {
     use rayplay_video::{Codec, create_decoder};
 
-    let cert_bytes = config.load_cert_bytes()?;
     let server_addr = config.server_addr;
     let pipeline_mode = config.pipeline_mode;
     let reconnect_timeout = config.reconnect_timeout;
 
-    connect_with_reconnect(server_addr, cert_bytes, reconnect_timeout, token, |transport, child| {
-        let frame_tx = frame_tx.clone();
-        async move {
-            // Default to HEVC for now; could be made configurable in the future
-            let decoder = create_decoder(Codec::Hevc, pipeline_mode)
-                .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
-            super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
-        }
-    })
-    .await
+    if config.pair {
+        // Pairing mode: insecure connect + SPAKE2
+        let transport = QuicVideoTransport::connect_insecure(server_addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("insecure connect failed: {e}"))?;
+
+        tracing::info!("Connected to host (insecure mode for pairing)");
+
+        let mut control = transport
+            .open_control()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
+
+        // Prompt user for PIN
+        tracing::info!("Enter the 6-digit PIN shown on the host:");
+        let mut pin = String::new();
+        std::io::stdin()
+            .read_line(&mut pin)
+            .map_err(|e| anyhow::anyhow!("failed to read PIN: {e}"))?;
+        let pin = pin.trim().to_string();
+
+        let signing_key = rayplay_network::client_pairing(&mut control, &pin)
+            .await
+            .map_err(|e| anyhow::anyhow!("pairing failed: {e}"))?;
+
+        tracing::info!("Pairing successful! Saving client key.");
+        rayplay_network::client_key_store::save_client_key(&signing_key)
+            .map_err(|e| anyhow::anyhow!("failed to save client key: {e}"))?;
+
+        // After pairing, run the decode pipeline on this connection
+        let decoder = create_decoder(Codec::Hevc, pipeline_mode)
+            .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
+        super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
+    } else {
+        // Normal mode: cert-based connect with challenge-response auth
+        let cert_bytes = config.load_cert_bytes()?;
+
+        // Load saved signing key for authentication
+        let signing_key = rayplay_network::client_key_store::load_client_key()
+            .map_err(|e| anyhow::anyhow!("failed to load client key: {e}"))?;
+
+        connect_with_reconnect(
+            server_addr,
+            cert_bytes,
+            reconnect_timeout,
+            token,
+            move |transport, child| {
+                let frame_tx = frame_tx.clone();
+                let signing_key = signing_key.clone();
+                async move {
+                    // Authenticate with saved signing key if available
+                    if let Some(ref key) = signing_key {
+                        let mut control = transport
+                            .open_control()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
+                        rayplay_network::client_auth_response(&mut control, key)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("authentication failed: {e}"))?;
+                        tracing::info!("Authenticated with host");
+                    } else {
+                        tracing::warn!(
+                            "No saved client key found, proceeding without authentication"
+                        );
+                    }
+
+                    let decoder = create_decoder(Codec::Hevc, pipeline_mode)
+                        .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
+                    super::receive::run_receive_loop(transport, decoder, frame_tx, child).await
+                }
+            },
+        )
+        .await
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::client::test_helper::loopback_listener;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_handler_shutdown_before_connect() {
-        let (listener, cert_bytes, addr) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(
-            connect_with_handler(addr, cert_bytes, token, |_t, _s| async { Ok(()) })
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_handler_connection_failure_returns_error() {
-        let (listener, _correct, addr) = loopback_listener();
-        let (_, wrong_cert, _) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
-        let token = CancellationToken::new();
-        let err = connect_with_handler(addr, wrong_cert, token, |_t, _s| async { Ok(()) })
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("connection"));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_handler_calls_on_connect_on_success() {
-        let (listener, cert_bytes, addr) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
-        let token = CancellationToken::new();
-        assert!(
-            connect_with_handler(addr, cert_bytes, token, |_t, _s| async { Ok(()) })
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_handler_propagates_handler_error() {
-        let (listener, cert_bytes, addr) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
-        let token = CancellationToken::new();
-        let err = connect_with_handler(addr, cert_bytes, token, |_t, _s| async {
-            Err(anyhow::anyhow!("handler failed"))
-        })
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("handler failed"));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_reconnect_shutdown_before_first_attempt() {
-        let (_listener, cert_bytes, addr) = loopback_listener();
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(
-            connect_with_reconnect(addr, cert_bytes, std::time::Duration::ZERO, token, |_t, _s| async { Ok(()) })
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_reconnect_retries_on_failure() {
-        let (listener, _correct, addr) = loopback_listener();
-        let (_, wrong_cert, _) = loopback_listener();
-        // Server accepts but wrong cert causes handshake failure → retry.
-        let _server = tokio::spawn(async move {
-            loop {
-                let _ = listener.accept().await;
-            }
-        });
-        let token = CancellationToken::new();
-        let token2 = token.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            token2.cancel();
-        });
-        assert!(
-            connect_with_reconnect(addr, wrong_cert, std::time::Duration::ZERO, token, |_t, _s| async { Ok(()) })
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_with_reconnect_resets_backoff_on_success() {
-        let (listener, cert_bytes, addr) = loopback_listener();
-        let _server = tokio::spawn(async move {
-            loop {
-                let _ = listener.accept().await;
-            }
-        });
-        let token = CancellationToken::new();
-        let token2 = token.clone();
-        // Handler succeeds → backoff resets → cancel on 2nd connect to exit.
-        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = call_count.clone();
-        let result = tokio::spawn(async move {
-            connect_with_reconnect(addr, cert_bytes, std::time::Duration::ZERO, token, move |_t, _s| {
-                let c = count.clone();
-                let t = token2.clone();
-                async move {
-                    if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1 {
-                        t.cancel();
-                    }
-                    Ok(())
-                }
-            })
-            .await
-        })
-        .await
-        .unwrap();
-        assert!(result.is_ok());
-        assert!(call_count.load(std::sync::atomic::Ordering::SeqCst) >= 2);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_cert_missing_returns_error() {
-        use super::super::config::ClientConfig;
-        let config = ClientConfig {
-            server_addr: "127.0.0.1:5000".parse().unwrap(),
-            cert_path: "/nonexistent/cert.der".into(),
-            width: 1280,
-            height: 720,
-            pipeline_mode: rayplay_video::PipelineMode::Auto,
-            reconnect_timeout: std::time::Duration::from_secs(30),
-        };
-        let (frame_tx, _rx) = crossbeam_channel::bounded(4);
-        let token = CancellationToken::new();
-        let err = connect(config, frame_tx, token).await.unwrap_err();
-        assert!(err.to_string().contains("failed to read"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_succeeds_with_valid_cert_and_immediate_shutdown() {
-        use super::super::config::ClientConfig;
-        let (listener, cert, addr) = loopback_listener();
-        let _server = tokio::spawn(async move { listener.accept().await });
-        let dir = tempfile::tempdir().unwrap();
-        let cert_path = dir.path().join("server.der");
-        std::fs::write(&cert_path, &cert).unwrap();
-        let config = ClientConfig {
-            server_addr: addr,
-            cert_path,
-            width: 1280,
-            height: 720,
-            pipeline_mode: rayplay_video::PipelineMode::Auto,
-            reconnect_timeout: std::time::Duration::from_secs(30),
-        };
-        let (frame_tx, _rx) = crossbeam_channel::bounded(4);
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(connect(config, frame_tx, token).await.is_ok());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_connect_handler_runs_until_shutdown() {
-        use super::super::config::ClientConfig;
-        let (listener, cert, addr) = loopback_listener();
-        let server_task = tokio::spawn(async move { listener.accept().await });
-        let dir = tempfile::tempdir().unwrap();
-        let cert_path = dir.path().join("server.der");
-        std::fs::write(&cert_path, &cert).unwrap();
-        let config = ClientConfig {
-            server_addr: addr,
-            cert_path,
-            width: 1280,
-            height: 720,
-            pipeline_mode: rayplay_video::PipelineMode::Auto,
-            reconnect_timeout: std::time::Duration::from_secs(30),
-        };
-        let (frame_tx, _rx) = crossbeam_channel::bounded(4);
-        let token = CancellationToken::new();
-        let task = tokio::spawn(connect(config, frame_tx, token.clone()));
-
-        let _server = server_task.await.unwrap();
-        token.cancel();
-        assert!(task.await.unwrap().is_ok());
-    }
-}
+mod tests;

@@ -1,4 +1,4 @@
-//! Session control types for the RayPlay streaming protocol (UC-015, ADR-010).
+//! Session control types for the `RayPlay` streaming protocol (UC-015, ADR-010).
 //!
 //! Defines the control messages exchanged over a reliable QUIC bidirectional
 //! stream, stream parameter negotiation types, observable session state, and
@@ -24,6 +24,24 @@ pub struct StreamParams {
     pub codec: String,
 }
 
+/// Outcome of a SPAKE2 pairing attempt (UC-016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PairingOutcome {
+    /// The client is now trusted and may connect without a PIN.
+    Accepted,
+    /// The pairing was rejected (wrong PIN, protocol error, etc.).
+    Rejected(String),
+}
+
+/// Client intent declaration for disambiguation of auth vs. pairing flows (UC-016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClientIntent {
+    /// Client wants to perform PIN-based pairing.
+    Pair,
+    /// Client wants to authenticate as a trusted client.
+    Auth,
+}
+
 /// Control messages exchanged over the reliable bidirectional QUIC stream.
 ///
 /// Wire format: 4-byte little-endian length prefix followed by JSON payload.
@@ -39,6 +57,22 @@ pub enum ControlMessage {
     KeepaliveAck,
     /// Bidirectional graceful disconnect signal (UC-015 AC5).
     Disconnect,
+    /// Client → Host: declares intent (pairing or auth) to avoid deadlock.
+    ClientHello(ClientIntent),
+    /// Client → Host: SPAKE2 message for PIN-based pairing (UC-016).
+    PairingRequest(Vec<u8>),
+    /// Host → Client: SPAKE2 response message (UC-016).
+    PairingResponse(Vec<u8>),
+    /// Client → Host: HMAC confirmation with embedded public key (UC-016).
+    PairingConfirm(Vec<u8>),
+    /// Host → Client: pairing result (UC-016).
+    PairingResult(PairingOutcome),
+    /// Host → Client: random nonce for trusted-client auth (UC-016).
+    AuthChallenge(Vec<u8>),
+    /// Client → Host: public key + signed nonce (UC-016).
+    AuthResponse(Vec<u8>),
+    /// Host → Client: authentication succeeded or failed (UC-016).
+    AuthResult(bool),
 }
 
 /// Observable session state for UI feedback (UC-015 AC3).
@@ -70,206 +104,10 @@ pub enum SessionError {
     /// A transport-level error occurred on the control channel.
     #[error("transport error: {0}")]
     Transport(String),
+    /// A pairing or authentication error (UC-016).
+    #[error("pairing failed: {0}")]
+    PairingFailed(String),
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_params() -> StreamParams {
-        StreamParams {
-            width: 1920,
-            height: 1080,
-            fps: 60,
-            codec: "hevc".to_string(),
-        }
-    }
-
-    // ── StreamParams ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_stream_params_clone_equals_original() {
-        let p = sample_params();
-        assert_eq!(p.clone(), p);
-    }
-
-    #[test]
-    fn test_stream_params_debug_contains_fields() {
-        let p = sample_params();
-        let dbg = format!("{p:?}");
-        assert!(dbg.contains("1920"));
-        assert!(dbg.contains("1080"));
-        assert!(dbg.contains("60"));
-        assert!(dbg.contains("hevc"));
-    }
-
-    #[test]
-    fn test_stream_params_inequality_on_different_width() {
-        let a = sample_params();
-        let b = StreamParams { width: 1280, ..a.clone() };
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn test_stream_params_inequality_on_different_codec() {
-        let a = sample_params();
-        let b = StreamParams {
-            codec: "h264".to_string(),
-            ..a.clone()
-        };
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn test_stream_params_serde_roundtrip() {
-        let p = sample_params();
-        let json = serde_json::to_string(&p).unwrap();
-        let restored: StreamParams = serde_json::from_str(&json).unwrap();
-        assert_eq!(p, restored);
-    }
-
-    #[test]
-    fn test_stream_params_empty_codec_allowed() {
-        let p = StreamParams {
-            width: 0,
-            height: 0,
-            fps: 0,
-            codec: String::new(),
-        };
-        let json = serde_json::to_string(&p).unwrap();
-        let restored: StreamParams = serde_json::from_str(&json).unwrap();
-        assert_eq!(p, restored);
-    }
-
-    // ── ControlMessage serde round-trips ──────────────────────────────────────
-
-    #[test]
-    fn test_serde_handshake_request() {
-        let msg = ControlMessage::HandshakeRequest(sample_params());
-        let json = serde_json::to_string(&msg).unwrap();
-        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, restored);
-    }
-
-    #[test]
-    fn test_serde_handshake_response() {
-        let msg = ControlMessage::HandshakeResponse(sample_params());
-        let json = serde_json::to_string(&msg).unwrap();
-        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, restored);
-    }
-
-    #[test]
-    fn test_serde_keepalive() {
-        let msg = ControlMessage::Keepalive;
-        let json = serde_json::to_string(&msg).unwrap();
-        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, restored);
-    }
-
-    #[test]
-    fn test_serde_keepalive_ack() {
-        let msg = ControlMessage::KeepaliveAck;
-        let json = serde_json::to_string(&msg).unwrap();
-        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, restored);
-    }
-
-    #[test]
-    fn test_serde_disconnect() {
-        let msg = ControlMessage::Disconnect;
-        let json = serde_json::to_string(&msg).unwrap();
-        let restored: ControlMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, restored);
-    }
-
-    #[test]
-    fn test_control_message_clone_equals_original() {
-        let msg = ControlMessage::HandshakeRequest(sample_params());
-        assert_eq!(msg.clone(), msg);
-    }
-
-    #[test]
-    fn test_control_message_debug_contains_variant() {
-        let msg = ControlMessage::Disconnect;
-        assert!(format!("{msg:?}").contains("Disconnect"));
-    }
-
-    #[test]
-    fn test_control_message_variants_are_distinct() {
-        assert_ne!(ControlMessage::Keepalive, ControlMessage::KeepaliveAck);
-        assert_ne!(ControlMessage::Keepalive, ControlMessage::Disconnect);
-    }
-
-    // ── SessionState ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_session_state_connected_equals_connected() {
-        assert_eq!(SessionState::Connected, SessionState::Connected);
-    }
-
-    #[test]
-    fn test_session_state_variants_are_distinct() {
-        assert_ne!(SessionState::Connected, SessionState::Reconnecting);
-        assert_ne!(SessionState::Reconnecting, SessionState::Disconnected);
-        assert_ne!(SessionState::Connected, SessionState::Disconnected);
-    }
-
-    #[test]
-    fn test_session_state_clone() {
-        let s = SessionState::Reconnecting;
-        assert_eq!(s, s.clone());
-    }
-
-    #[test]
-    fn test_session_state_copy() {
-        let s = SessionState::Connected;
-        let s2 = s;
-        assert_eq!(s, s2);
-    }
-
-    #[test]
-    fn test_session_state_debug() {
-        assert!(format!("{:?}", SessionState::Connected).contains("Connected"));
-        assert!(format!("{:?}", SessionState::Reconnecting).contains("Reconnecting"));
-        assert!(format!("{:?}", SessionState::Disconnected).contains("Disconnected"));
-    }
-
-    // ── SessionError ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_session_error_handshake_failed_display() {
-        let e = SessionError::HandshakeFailed("bad message".to_string());
-        assert_eq!(e.to_string(), "handshake failed: bad message");
-    }
-
-    #[test]
-    fn test_session_error_keepalive_timeout_display() {
-        let e = SessionError::KeepaliveTimeout;
-        assert_eq!(e.to_string(), "keepalive timeout");
-    }
-
-    #[test]
-    fn test_session_error_remote_closed_display() {
-        let e = SessionError::RemoteClosed;
-        assert_eq!(e.to_string(), "session closed by remote");
-    }
-
-    #[test]
-    fn test_session_error_serialization_display() {
-        let e = SessionError::Serialization("invalid json".to_string());
-        assert_eq!(e.to_string(), "serialization error: invalid json");
-    }
-
-    #[test]
-    fn test_session_error_transport_display() {
-        let e = SessionError::Transport("connection lost".to_string());
-        assert_eq!(e.to_string(), "transport error: connection lost");
-    }
-
-    #[test]
-    fn test_session_error_debug_format() {
-        let e = SessionError::KeepaliveTimeout;
-        assert!(format!("{e:?}").contains("KeepaliveTimeout"));
-    }
-}
+mod tests;
