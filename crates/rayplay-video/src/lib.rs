@@ -44,7 +44,7 @@ mod wgpu_surface;
 pub mod openh264_dec;
 #[cfg(feature = "fallback")]
 pub mod openh264_enc;
-#[cfg(feature = "fallback")]
+#[cfg(all(feature = "fallback", not(target_os = "macos")))]
 pub(crate) mod scrap_capture;
 
 #[cfg(feature = "ffmpeg-fallback")]

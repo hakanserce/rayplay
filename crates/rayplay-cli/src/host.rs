@@ -172,6 +172,7 @@ pub async fn serve(
 /// - `packet_tx` is closed (receiver dropped — stream is shutting down),
 /// - a capture or encode error occurs (the error is forwarded via `packet_tx`),
 /// - or a send on `packet_tx` fails because the receiver was already dropped.
+#[allow(clippy::needless_pass_by_value)] // takes ownership to drop sender on loop exit
 pub(crate) fn drive_encode_loop(
     mut capturer: Box<dyn ScreenCapturer>,
     mut encoder: Box<dyn VideoEncoder>,
@@ -418,7 +419,7 @@ pub(crate) async fn stream(
 /// Non-Windows streaming path — delegates to platform-specific modules.
 ///
 /// On macOS, uses [`host_capture_macos`](crate::host_capture_macos) which
-/// checks Screen Recording permission and captures via ScreenCaptureKit.
+/// checks Screen Recording permission and captures via `ScreenCaptureKit`.
 /// On other non-Windows platforms, uses the software fallback pipeline.
 #[cfg(target_os = "macos")]
 pub(crate) async fn stream(

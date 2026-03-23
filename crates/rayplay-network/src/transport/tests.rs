@@ -250,6 +250,50 @@ async fn test_from_connection_uses_default_fragment_payload() {
     );
 }
 
+// ── peer_certificate ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_peer_certificate_returns_server_cert() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let _server = tokio::spawn(async move { listener.accept().await });
+
+    let client = QuicVideoTransport::connect(server_addr, cert_der.clone())
+        .await
+        .expect("connect");
+    let peer_cert = client.peer_certificate().expect("should have peer cert");
+    assert_eq!(peer_cert, cert_der);
+}
+
+#[tokio::test]
+async fn test_peer_certificate_via_insecure_returns_cert() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let _server = tokio::spawn(async move { listener.accept().await });
+
+    let client = QuicVideoTransport::connect_insecure(server_addr)
+        .await
+        .expect("insecure connect");
+    let peer_cert = client.peer_certificate().expect("should have peer cert");
+    assert_eq!(peer_cert, cert_der);
+}
+
+#[tokio::test]
+async fn test_peer_certificate_server_side_returns_none() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let _client_task = tokio::spawn(async move {
+        QuicVideoTransport::connect(server_addr, cert_der).await
+    });
+
+    let server = listener.accept().await.expect("accept");
+    // Server side: client does not present a certificate
+    assert!(server.peer_certificate().is_none());
+}
+
 // ── connect_insecure ─────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

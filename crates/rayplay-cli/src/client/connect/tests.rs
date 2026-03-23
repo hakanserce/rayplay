@@ -142,7 +142,9 @@ async fn test_connect_cert_missing_returns_error() {
     use super::super::config::ClientConfig;
     let config = ClientConfig {
         server_addr: "127.0.0.1:5000".parse().unwrap(),
-        cert_path: "/nonexistent/cert.der".into(),
+        host: "127.0.0.1".to_string(),
+        port: 5000,
+        cert_path: Some("/nonexistent/cert.der".into()),
         pair: false,
         width: 1280,
         height: 720,
@@ -166,7 +168,9 @@ async fn test_connect_succeeds_with_valid_cert_and_immediate_shutdown() {
     std::fs::write(&cert_path, &cert).unwrap();
     let config = ClientConfig {
         server_addr: addr,
-        cert_path,
+        host: "127.0.0.1".to_string(),
+        port: addr.port(),
+        cert_path: Some(cert_path),
         pair: false,
         width: 1280,
         height: 720,
@@ -190,7 +194,9 @@ async fn test_connect_handler_runs_until_shutdown() {
     std::fs::write(&cert_path, &cert).unwrap();
     let config = ClientConfig {
         server_addr: addr,
-        cert_path,
+        host: "127.0.0.1".to_string(),
+        port: addr.port(),
+        cert_path: Some(cert_path),
         pair: false,
         width: 1280,
         height: 720,

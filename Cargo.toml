@@ -30,6 +30,7 @@ rand_core         = { version = "0.6", features = ["getrandom"] }
 chrono            = { version = "0.4", features = ["serde"] }
 hmac              = "0.12"
 sha2              = "0.10"
+tempfile          = "3"
 
 [profile.dev]
 opt-level = 0

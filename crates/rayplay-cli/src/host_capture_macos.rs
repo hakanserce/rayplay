@@ -1,7 +1,7 @@
 //! macOS-specific capture initialization for the host.
 //!
 //! Checks Screen Recording permission and initializes the capture pipeline
-//! via ScreenCaptureKit.  Excluded from coverage — platform I/O that
+//! via `ScreenCaptureKit`.  Excluded from coverage — platform I/O that
 //! requires a real display.
 
 use anyhow::Result;

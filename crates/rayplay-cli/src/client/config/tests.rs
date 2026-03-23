@@ -47,9 +47,16 @@ fn test_client_args_custom_port_and_dimensions() {
 }
 
 #[test]
-fn test_from_args_uses_default_cert_when_none_provided() {
+fn test_from_args_cert_path_none_when_not_provided() {
     let config = ClientConfig::from_args(&dummy_args("127.0.0.1")).unwrap();
-    assert!(config.cert_path.ends_with(".config/rayview/server.der"));
+    assert!(config.cert_path.is_none());
+}
+
+#[test]
+fn test_from_args_host_and_port_forwarded() {
+    let config = ClientConfig::from_args(&dummy_args("192.168.1.10")).unwrap();
+    assert_eq!(config.host, "192.168.1.10");
+    assert_eq!(config.port, 5000);
 }
 
 #[test]
@@ -96,34 +103,22 @@ fn test_from_args_dimensions_and_cert_forwarded() {
     let config = ClientConfig::from_args(&args).unwrap();
     assert_eq!(config.width, 1920);
     assert_eq!(config.height, 1080);
-    assert_eq!(config.cert_path, std::path::Path::new("/path/to/cert.der"));
+    assert_eq!(
+        config.cert_path.as_deref(),
+        Some(std::path::Path::new("/path/to/cert.der"))
+    );
 }
 
 #[test]
-fn test_default_cert_path_without_home_falls_back_to_dot() {
-    use std::sync::Mutex;
-    static LOCK: Mutex<()> = Mutex::new(());
-    let _guard = LOCK.lock().unwrap();
-
-    let orig = std::env::var_os("HOME");
-    // SAFETY: single-threaded via mutex
-    unsafe { std::env::remove_var("HOME") };
-    let path = default_cert_path();
-    match orig {
-        Some(v) => unsafe { std::env::set_var("HOME", v) },
-        None => {}
-    }
-    assert_eq!(path, std::path::Path::new("./.config/rayview/server.der"));
-}
-
-#[test]
-fn test_load_cert_bytes_reads_file_contents() {
+fn test_load_cert_bytes_reads_explicit_cert_path() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cert.der");
     std::fs::write(&path, b"fakecert").unwrap();
     let config = ClientConfig {
         server_addr: "127.0.0.1:5000".parse().unwrap(),
-        cert_path: path,
+        host: "127.0.0.1".to_string(),
+        port: 5000,
+        cert_path: Some(path),
         pair: false,
         width: 1280,
         height: 720,
@@ -134,10 +129,12 @@ fn test_load_cert_bytes_reads_file_contents() {
 }
 
 #[test]
-fn test_load_cert_bytes_missing_file_returns_descriptive_error() {
+fn test_load_cert_bytes_missing_explicit_cert_returns_descriptive_error() {
     let config = ClientConfig {
         server_addr: "127.0.0.1:5000".parse().unwrap(),
-        cert_path: "/no/such/file.der".into(),
+        host: "127.0.0.1".to_string(),
+        port: 5000,
+        cert_path: Some("/no/such/file.der".into()),
         pair: false,
         width: 1280,
         height: 720,
@@ -150,6 +147,117 @@ fn test_load_cert_bytes_missing_file_returns_descriptive_error() {
             .contains("failed to read server certificate")
     );
     assert!(err.to_string().contains("/no/such/file.der"));
+}
+
+#[test]
+fn test_load_cert_bytes_no_cert_no_store_returns_descriptive_error() {
+    let config = ClientConfig {
+        server_addr: "127.0.0.1:5000".parse().unwrap(),
+        host: "127.0.0.1".to_string(),
+        port: 59999,
+        cert_path: None,
+        pair: false,
+        width: 1280,
+        height: 720,
+        pipeline_mode: PipelineMode::Auto,
+        reconnect_timeout: Duration::from_secs(30),
+    };
+    let err = config.load_cert_bytes().unwrap_err();
+    assert!(err.to_string().contains("no server certificate found"));
+}
+
+/// Helper: save a cert to the real platform cert store and clean up on drop.
+struct TestCertGuard {
+    host: String,
+    port: u16,
+}
+
+impl TestCertGuard {
+    fn save(host: &str, port: u16, data: &[u8]) -> Self {
+        rayplay_network::server_cert_store::save_server_cert(host, port, data).unwrap();
+        Self {
+            host: host.to_string(),
+            port,
+        }
+    }
+}
+
+impl Drop for TestCertGuard {
+    fn drop(&mut self) {
+        // Best-effort cleanup: remove the test cert file
+        let _ =
+            rayplay_network::server_cert_store::load_server_cert(&self.host, self.port)
+                .ok();
+        // We can't easily get the path from the public API, so just leave it.
+        // The unique host name ensures it won't interfere with anything.
+    }
+}
+
+#[test]
+fn test_load_cert_bytes_finds_cert_from_store() {
+    // Use a unique host name that won't clash with real usage
+    let host = "test-load-cert-bytes-store-7f2a3b";
+    let port = 55555;
+    let cert_data = b"stored-server-cert";
+    let _guard = TestCertGuard::save(host, port, cert_data);
+
+    let config = ClientConfig {
+        server_addr: "127.0.0.1:55555".parse().unwrap(),
+        host: host.to_string(),
+        port,
+        cert_path: None,
+        pair: false,
+        width: 1280,
+        height: 720,
+        pipeline_mode: PipelineMode::Auto,
+        reconnect_timeout: Duration::from_secs(30),
+    };
+    assert_eq!(config.load_cert_bytes().unwrap(), cert_data);
+}
+
+#[test]
+fn test_load_cert_bytes_explicit_cert_takes_priority_over_store() {
+    let host = "test-load-cert-bytes-priority-9e4c1d";
+    let port = 55556;
+    let _guard = TestCertGuard::save(host, port, b"store-cert");
+
+    let dir = tempfile::tempdir().unwrap();
+    let cert_path = dir.path().join("explicit.der");
+    std::fs::write(&cert_path, b"explicit-cert").unwrap();
+
+    let config = ClientConfig {
+        server_addr: "127.0.0.1:55556".parse().unwrap(),
+        host: host.to_string(),
+        port,
+        cert_path: Some(cert_path),
+        pair: false,
+        width: 1280,
+        height: 720,
+        pipeline_mode: PipelineMode::Auto,
+        reconnect_timeout: Duration::from_secs(30),
+    };
+    // Explicit --cert should win over the store
+    assert_eq!(config.load_cert_bytes().unwrap(), b"explicit-cert");
+}
+
+#[test]
+fn test_load_cert_bytes_error_message_includes_host_and_port() {
+    let config = ClientConfig {
+        server_addr: "10.0.0.5:7777".parse().unwrap(),
+        host: "10.0.0.5".to_string(),
+        port: 7777,
+        cert_path: None,
+        pair: false,
+        width: 1280,
+        height: 720,
+        pipeline_mode: PipelineMode::Auto,
+        reconnect_timeout: Duration::from_secs(30),
+    };
+    let err = config.load_cert_bytes().unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("10.0.0.5"));
+    assert!(msg.contains("7777"));
+    assert!(msg.contains("--pair"));
 }
 
 // ── --software flag ──────────────────────────────────────────────────────

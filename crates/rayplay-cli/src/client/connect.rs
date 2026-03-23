@@ -173,6 +173,19 @@ pub async fn connect(
         rayplay_network::client_key_store::save_client_key(&signing_key)
             .map_err(|e| anyhow::anyhow!("failed to save client key: {e}"))?;
 
+        // Extract and save the server's TLS certificate for future reconnections
+        if let Some(cert_der) = transport.peer_certificate() {
+            rayplay_network::server_cert_store::save_server_cert(
+                &config.host,
+                config.port,
+                &cert_der,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to save server certificate: {e}"))?;
+            tracing::info!("Server certificate saved for future connections.");
+        } else {
+            tracing::warn!("Could not extract server certificate from connection.");
+        }
+
         // After pairing, run the decode pipeline on this connection
         let decoder = create_decoder(Codec::Hevc, pipeline_mode)
             .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;

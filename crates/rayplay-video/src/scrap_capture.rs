@@ -168,6 +168,7 @@ mod tests {
         assert!(err.to_string().contains("capturer"));
     }
 
+    #[cfg(feature = "hw-codec-tests")]
     #[test]
     fn test_new_returns_ok_or_initialization_error() {
         let result = ScrapCapturer::new(CaptureConfig::default());

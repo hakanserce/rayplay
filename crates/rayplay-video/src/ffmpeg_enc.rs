@@ -85,6 +85,12 @@ impl FfmpegEncoder {
         opts.set("preset", "ultrafast");
         opts.set("tune", "zerolatency");
 
+        // Ensure VPS/SPS/PPS are embedded in every keyframe so the decoder
+        // can initialize from any keyframe without out-of-band extradata.
+        if config.codec == Codec::Hevc {
+            opts.set("x265-params", "repeat-headers=1");
+        }
+
         let encoder = ctx
             .open_with(opts)
             .map_err(|e| VideoError::EncodingFailed {
@@ -369,5 +375,105 @@ mod tests {
         let config = EncoderConfig::with_codec(64, 64, 0, Codec::H264);
         let enc = FfmpegEncoder::new(config).expect("encoder should open with 0 fps");
         assert_eq!(enc.duration_us(), 0);
+    }
+
+    /// Verifies that HEVC keyframes contain VPS/SPS/PPS parameter sets
+    /// (the `repeat-headers=1` fix).
+    ///
+    /// HEVC Annex B NAL unit type is in `(byte[0] >> 1) & 0x3F`:
+    ///   - VPS = 32, SPS = 33, PPS = 34
+    #[test]
+    fn test_hevc_keyframe_contains_parameter_sets() {
+        let mut enc = FfmpegEncoder::new(make_config(64, 64, 30, Codec::Hevc)).unwrap();
+
+        // Encode enough frames to get output (encoder may buffer the first few)
+        let mut packets = Vec::new();
+        for i in 0..5 {
+            let f = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, i * 33_333);
+            if let Some(pkt) = enc.encode(EncoderInput::Cpu(&f)).unwrap() {
+                packets.push(pkt);
+            }
+        }
+        packets.extend(enc.flush().unwrap());
+
+        // Find the first keyframe
+        let keyframe = packets
+            .iter()
+            .find(|p| p.is_keyframe)
+            .expect("should produce at least one keyframe");
+
+        // Scan for Annex B start codes and extract NAL unit types
+        let data = &keyframe.data;
+        let mut nal_types = Vec::new();
+        for i in 0..data.len().saturating_sub(4) {
+            // 3-byte or 4-byte start code
+            let is_start_code = (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1)
+                || (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1);
+            if is_start_code {
+                let nal_offset = if data[i + 2] == 1 { i + 3 } else { i + 4 };
+                if nal_offset < data.len() {
+                    let nal_type = (data[nal_offset] >> 1) & 0x3F;
+                    nal_types.push(nal_type);
+                }
+            }
+        }
+
+        assert!(
+            nal_types.contains(&32),
+            "keyframe should contain VPS (NAL type 32), found: {nal_types:?}"
+        );
+        assert!(
+            nal_types.contains(&33),
+            "keyframe should contain SPS (NAL type 33), found: {nal_types:?}"
+        );
+        assert!(
+            nal_types.contains(&34),
+            "keyframe should contain PPS (NAL type 34), found: {nal_types:?}"
+        );
+    }
+
+    /// Verifies H.264 keyframes contain SPS/PPS (sanity check — zerolatency
+    /// already handles this, but we verify it explicitly).
+    #[test]
+    fn test_h264_keyframe_contains_sps_pps() {
+        let mut enc = FfmpegEncoder::new(make_config(64, 64, 30, Codec::H264)).unwrap();
+
+        let mut packets = Vec::new();
+        for i in 0..5 {
+            let f = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, i * 33_333);
+            if let Some(pkt) = enc.encode(EncoderInput::Cpu(&f)).unwrap() {
+                packets.push(pkt);
+            }
+        }
+        packets.extend(enc.flush().unwrap());
+
+        let keyframe = packets
+            .iter()
+            .find(|p| p.is_keyframe)
+            .expect("should produce at least one keyframe");
+
+        // H.264 NAL type is byte & 0x1F: SPS=7, PPS=8
+        let data = &keyframe.data;
+        let mut nal_types = Vec::new();
+        for i in 0..data.len().saturating_sub(4) {
+            let is_start_code = (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1)
+                || (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1);
+            if is_start_code {
+                let nal_offset = if data[i + 2] == 1 { i + 3 } else { i + 4 };
+                if nal_offset < data.len() {
+                    let nal_type = data[nal_offset] & 0x1F;
+                    nal_types.push(nal_type);
+                }
+            }
+        }
+
+        assert!(
+            nal_types.contains(&7),
+            "H.264 keyframe should contain SPS (NAL type 7), found: {nal_types:?}"
+        );
+        assert!(
+            nal_types.contains(&8),
+            "H.264 keyframe should contain PPS (NAL type 8), found: {nal_types:?}"
+        );
     }
 }
