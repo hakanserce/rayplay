@@ -390,36 +390,6 @@ pub(crate) async fn stream_with_zero_copy_pipeline(
     result
 }
 
-/// Creates the capture and encoder pipeline but does not start streaming.
-///
-/// Initializes the capturer and encoder with the actual capture resolution
-/// for the software fallback pipeline.
-///
-/// # Errors
-///
-/// Returns an error if capture initialization fails or encoder creation fails.
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-#[allow(clippy::unused_async)] // must match macOS signature for cfg dispatch
-pub(crate) async fn prepare_pipeline(
-    config: &HostConfig,
-) -> Result<(Box<dyn ScreenCapturer>, Box<dyn VideoEncoder>)> {
-    use rayplay_video::{CaptureConfig, create_capturer, encoder::create_encoder};
-
-    let cap_config = CaptureConfig {
-        target_fps: config.encoder_config.fps,
-        acquire_timeout_ms: 100,
-    };
-    let capturer =
-        create_capturer(cap_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
-    let (cap_width, cap_height) = capturer.resolution();
-
-    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-        .with_bitrate(config.encoder_config.bitrate.clone());
-    let encoder = create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
-
-    Ok((capturer, encoder))
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
