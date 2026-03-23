@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -108,8 +111,8 @@ jobs:
         with:
           components: clippy
 
-      - name: Install FFmpeg dev libraries
-        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev pkg-config clang
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev pkg-config clang
 
       - name: Cache cargo dependencies
         uses: actions/cache@v5
@@ -142,6 +145,8 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v5
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxcb1-dev libxcb-shm0-dev libxcb-randr0-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-make
         uses: taiki-e/install-action@cargo-make

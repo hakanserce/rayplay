@@ -78,7 +78,7 @@ impl FfmpegEncoder {
             1,
             i32::from(u16::try_from(config.fps).unwrap_or(u16::MAX)),
         ));
-        ctx.set_bit_rate(config.resolved_bitrate().into());
+        ctx.set_bit_rate(config.resolved_bitrate() as usize);
 
         let mut opts = Dictionary::new();
         // ultrafast/zerolatency are valid for both libx264 and libx265

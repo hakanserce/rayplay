@@ -235,8 +235,8 @@ mod inner {
                 Quality: 0,
             },
             Usage: D3D11_USAGE_STAGING,
-            BindFlags: D3D11_BIND_FLAG(0).0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0,
+            BindFlags: 0u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
             MiscFlags: Default::default(),
         };
         let mut staging = None;
