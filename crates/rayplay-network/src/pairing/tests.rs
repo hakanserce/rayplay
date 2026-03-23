@@ -30,6 +30,15 @@ async fn control_pair() -> (ControlChannel, ControlChannel) {
     (client_ctrl, server_ctrl)
 }
 
+/// Sends `ClientHello(Pair)` then runs `client_pairing`, mirroring the CLI flow.
+async fn full_client_pairing(
+    control: &mut ControlChannel,
+    pin: &str,
+) -> Result<SigningKey, SessionError> {
+    client_send_pair_intent(control).await?;
+    client_pairing(control, pin).await
+}
+
 /// Consumes the `ClientHello` message and dispatches to the appropriate
 /// host-side function (pairing or auth challenge), mirroring the CLI glue.
 async fn host_dispatch(
@@ -61,7 +70,7 @@ async fn test_pairing_flow_success() {
     let mut trust_db = TrustDatabase::new();
 
     let (client_result, server_result) = tokio::join!(
-        client_pairing(&mut client_ctrl, pin),
+        full_client_pairing(&mut client_ctrl, pin),
         host_dispatch(&mut server_ctrl, pin, &mut trust_db, "test-client"),
     );
 
@@ -81,7 +90,7 @@ async fn test_pairing_flow_pin_mismatch() {
     let mut trust_db = TrustDatabase::new();
 
     let (client_result, server_result) = tokio::join!(
-        client_pairing(&mut client_ctrl, "123456"),
+        full_client_pairing(&mut client_ctrl, "123456"),
         host_dispatch(&mut server_ctrl, "654321", &mut trust_db, "test-client"),
     );
 
@@ -100,7 +109,7 @@ async fn test_auth_flow_success() {
     // First, pair to get a trusted key
     let pin = "123456";
     let (client_key, _) = tokio::join!(
-        client_pairing(&mut client_ctrl, pin),
+        full_client_pairing(&mut client_ctrl, pin),
         host_dispatch(&mut server_ctrl, pin, &mut trust_db, "test-device"),
     );
     let key = client_key.unwrap();
@@ -258,13 +267,9 @@ async fn test_client_pairing_connection_closed_during_wait() {
     // Server closes connection before sending response
     let client_task = tokio::spawn(async move { client_pairing(&mut client_ctrl, "123456").await });
 
-    // Send ClientHello, receive, then close
-    let hello = server_ctrl.recv_msg("test").await.unwrap();
-    if let ControlMessage::ClientHello(ClientIntent::Pair) = hello {
-        // Receive PairingRequest but don't respond
-        let _request = server_ctrl.recv_msg("test").await.unwrap();
-        drop(server_ctrl);
-    }
+    // Receive PairingRequest but don't respond, then close
+    let _request = server_ctrl.recv_msg("test").await.unwrap();
+    drop(server_ctrl);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -299,8 +304,6 @@ async fn test_client_pairing_unexpected_response() {
     let (mut client_ctrl, mut server_ctrl) = control_pair().await;
 
     let server_task = tokio::spawn(async move {
-        // Wait for ClientHello
-        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Wait for PairingRequest but send wrong response
         let _request = server_ctrl.recv_msg("test").await.unwrap();
         server_ctrl
@@ -377,8 +380,7 @@ async fn test_client_pairing_stream_closed_unexpectedly() {
     let (mut client_ctrl, mut server_ctrl) = control_pair().await;
 
     let server_task = tokio::spawn(async move {
-        // Wait for ClientHello and PairingRequest, then close stream
-        let _hello = server_ctrl.recv_msg("test").await.unwrap();
+        // Wait for PairingRequest, then close stream
         let _request = server_ctrl.recv_msg("test").await.unwrap();
         server_ctrl.sender.stream.finish().unwrap();
     });
@@ -419,7 +421,7 @@ async fn test_auth_invalid_signature_rejected() {
     let mut trust_db = TrustDatabase::new();
 
     let (client_key, _) = tokio::join!(
-        client_pairing(&mut client_ctrl, pin),
+        full_client_pairing(&mut client_ctrl, pin),
         host_dispatch(&mut server_ctrl, pin, &mut trust_db, "test-device"),
     );
     let key = client_key.unwrap();
@@ -592,8 +594,6 @@ async fn test_client_pairing_result_unexpected_message() {
     let pin = "123456";
 
     let server_task = tokio::spawn(async move {
-        // Consume ClientHello
-        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Consume PairingRequest
         let _request = server_ctrl.recv_msg("test").await.unwrap();
         // Send PairingResponse (dummy SPAKE2 message)
@@ -704,8 +704,6 @@ async fn test_client_pairing_spake2_finish_fails_with_garbage_message() {
     let pin = "123456";
 
     let server_task = tokio::spawn(async move {
-        // Wait for ClientHello
-        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Wait for PairingRequest
         let _request = server_ctrl.recv_msg("test").await.unwrap();
         // Send garbage as PairingResponse instead of valid SPAKE2 message

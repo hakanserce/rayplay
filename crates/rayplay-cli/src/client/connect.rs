@@ -152,7 +152,12 @@ pub async fn connect(
             .await
             .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
 
-        // Prompt user for PIN
+        // Tell the host we want to pair so it generates and displays the PIN.
+        rayplay_network::client_send_pair_intent(&mut control)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to send pair intent: {e}"))?;
+
+        // Now prompt the user — the host is already showing the PIN.
         tracing::info!("Enter the 6-digit PIN shown on the host:");
         let mut pin = String::new();
         std::io::stdin()

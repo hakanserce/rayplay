@@ -30,7 +30,10 @@ pub use keepalive::{
     DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_TIMEOUT, run_keepalive_responder,
     run_keepalive_sender,
 };
-pub use pairing::{client_auth_response, client_pairing, host_auth_challenge, host_pairing};
+pub use pairing::{
+    client_auth_response, client_pairing, client_send_pair_intent, host_auth_challenge,
+    host_pairing,
+};
 pub use reassembler::VideoReassembler;
 pub use transport::{QuicListener, QuicVideoTransport};
 pub use wire::{
