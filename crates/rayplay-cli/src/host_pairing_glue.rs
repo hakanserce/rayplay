@@ -151,7 +151,10 @@ async fn build_generic_pipeline(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        use rayplay_video::{CaptureConfig, create_capturer, encoder::{EncoderConfig, create_encoder}};
+        use rayplay_video::{
+            CaptureConfig, create_capturer,
+            encoder::{EncoderConfig, create_encoder},
+        };
 
         let cap_config = CaptureConfig {
             target_fps: config.encoder_config.fps,
