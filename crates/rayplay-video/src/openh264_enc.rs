@@ -143,6 +143,56 @@ fn bgra_to_yuv(data: &[u8], width: u32, height: u32, stride: u32) -> YUVBuffer {
     YUVBuffer::from_vec(yuv, img_w, img_h)
 }
 
+/// Splits an H.264 Annex B bitstream into individual NAL units.
+fn split_h264_nal_units(data: &[u8]) -> Vec<&[u8]> {
+    let mut nals = Vec::new();
+    let mut i = 0;
+    let mut nal_start: Option<usize> = None;
+
+    while i < data.len() {
+        if i + 3 < data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
+        {
+            if let Some(start) = nal_start {
+                nals.push(&data[start..i]);
+            }
+            nal_start = Some(i + 4);
+            i += 4;
+        } else if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            if let Some(start) = nal_start {
+                nals.push(&data[start..i]);
+            }
+            nal_start = Some(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    if let Some(start) = nal_start.filter(|&s| s < data.len()) {
+        nals.push(&data[start..]);
+    }
+    nals
+}
+
+/// Detects if an H.264 bitstream contains an IDR slice (NAL unit type 5),
+/// which indicates a keyframe.
+fn is_h264_keyframe(data: &[u8]) -> bool {
+    let nals = split_h264_nal_units(data);
+    for nal in nals {
+        if !nal.is_empty() {
+            let nal_type = nal[0] & 0x1F;
+            if nal_type == 5 {
+                // NAL type 5 = IDR slice
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl VideoEncoder for OpenH264Encoder {
     fn encode(&mut self, input: EncoderInput<'_>) -> Result<Option<EncodedPacket>, VideoError> {
         let frame = match input {
@@ -181,9 +231,12 @@ impl VideoEncoder for OpenH264Encoder {
             0
         };
 
+        // Detect actual keyframes by scanning for IDR slice NAL units
+        let is_keyframe = is_h264_keyframe(&data);
+
         Ok(Some(EncodedPacket::new(
             data,
-            true, // OpenH264 baseline profile: every frame is a keyframe by default
+            is_keyframe,
             frame.timestamp_us,
             duration_us,
         )))

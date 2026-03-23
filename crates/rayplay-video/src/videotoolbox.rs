@@ -29,10 +29,8 @@
 ///
 /// # Hardware Tests
 ///
-/// The actual `VideoToolbox` API calls require Apple Silicon hardware and are
-/// gated behind the `hw-codec-tests` feature flag. Without that feature,
-/// `VtDecoder` parses the bitstream and validates parameter sets but returns
-/// `VideoError::DecodingFailed` rather than submitting to hardware.
+/// The actual `VideoToolbox` API calls are always compiled on macOS.
+/// Tests that require actual hardware are gated behind the `hw-codec-tests` feature flag.
 ///
 /// Required frameworks: `VideoToolbox`, `CoreMedia`, `CoreFoundation`, `CoreVideo`.
 #[cfg(target_os = "macos")]
@@ -46,13 +44,11 @@ mod macos {
         packet::EncodedPacket,
     };
 
-    #[cfg(feature = "hw-codec-tests")]
     use crate::decoded_frame::{IoSurfaceHandle, PixelFormat};
 
-    // ── Hardware-only FFI (compiled only with --features hw-codec-tests) ────────
+    // ── Hardware FFI (always compiled on macOS) ────────────────────────────
 
     /// Mirrors `CMTime` from `CoreMedia`. Must match the C layout exactly.
-    #[cfg(feature = "hw-codec-tests")]
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct CmTime {
@@ -62,7 +58,6 @@ mod macos {
         epoch: i64,
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     impl CmTime {
         const INVALID: Self = Self {
             value: 0,
@@ -83,7 +78,6 @@ mod macos {
     }
 
     /// Mirrors `CMSampleTimingInfo` from `CoreMedia`.
-    #[cfg(feature = "hw-codec-tests")]
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct CmSampleTimingInfo {
@@ -93,7 +87,6 @@ mod macos {
     }
 
     /// Output slot populated by the `VTDecompressionOutputCallback`.
-    #[cfg(feature = "hw-codec-tests")]
     struct FrameSlot {
         image_buffer: *mut c_void,
         status: i32,
@@ -105,7 +98,6 @@ mod macos {
     ///
     /// `source_frame_ref_con` must point to a valid `FrameSlot` alive for the duration
     /// of `VTDecompressionSessionDecodeFrame`.
-    #[cfg(feature = "hw-codec-tests")]
     unsafe extern "C" fn decode_callback(
         _decompression_output_ref_con: *mut c_void,
         source_frame_ref_con: *mut c_void,
@@ -122,7 +114,6 @@ mod macos {
     }
 
     /// Mirrors `VTDecompressionOutputCallbackRecord`.
-    #[cfg(feature = "hw-codec-tests")]
     #[repr(C)]
     struct VtOutputCallbackRecord {
         callback:
@@ -130,7 +121,6 @@ mod macos {
         ref_con: *mut c_void,
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     #[link(name = "VideoToolbox", kind = "framework")]
     unsafe extern "C" {
         fn VTDecompressionSessionCreate(
@@ -155,7 +145,6 @@ mod macos {
         fn VTDecompressionSessionInvalidate(session: *mut c_void);
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     #[link(name = "CoreMedia", kind = "framework")]
     unsafe extern "C" {
         fn CMVideoFormatDescriptionCreateFromHEVCParameterSets(
@@ -202,13 +191,11 @@ mod macos {
         ) -> i32;
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRelease(cf: *const c_void);
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     #[link(name = "CoreVideo", kind = "framework")]
     unsafe extern "C" {
         fn CVPixelBufferGetWidth(pixel_buffer: *mut c_void) -> usize;
@@ -220,7 +207,6 @@ mod macos {
         fn CVPixelBufferGetIOSurface(pixel_buffer: *mut c_void) -> *mut c_void;
     }
 
-    #[cfg(feature = "hw-codec-tests")]
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRetain(cf: *const c_void) -> *const c_void;
@@ -233,7 +219,6 @@ mod macos {
     ///
     /// Each NAL unit's `0x00 0x00 0x00 0x01` or `0x00 0x00 0x01` start code is
     /// replaced with a 4-byte big-endian NAL unit length prefix.
-    #[cfg_attr(not(feature = "hw-codec-tests"), allow(dead_code))]
     #[allow(clippy::cast_possible_truncation)] // NAL units are always < 4 GiB
     fn annex_b_to_length_prefixed(data: &[u8]) -> Vec<u8> {
         let nals = split_nal_units(data);
@@ -354,7 +339,6 @@ mod macos {
         ///
         /// For HEVC: extracts VPS/SPS/PPS parameter sets.
         /// For H.264: extracts SPS/PPS parameter sets.
-        #[cfg_attr(not(feature = "hw-codec-tests"), allow(clippy::unused_self))]
         fn init_session(&mut self, packet: &EncodedPacket) -> Result<(), VideoError> {
             let nals = split_nal_units(&packet.data);
             let param_sets: Vec<&[u8]> = nals
@@ -376,89 +360,77 @@ mod macos {
                 });
             }
 
-            #[cfg(feature = "hw-codec-tests")]
-            {
-                let ptrs: Vec<*const u8> = param_sets.iter().map(|n| n.as_ptr()).collect();
-                let sizes: Vec<usize> = param_sets.iter().map(|n| n.len()).collect();
+            let ptrs: Vec<*const u8> = param_sets.iter().map(|n| n.as_ptr()).collect();
+            let sizes: Vec<usize> = param_sets.iter().map(|n| n.len()).collect();
 
-                let mut fmt_desc: *mut c_void = std::ptr::null_mut();
-                // SAFETY: ptrs and sizes are valid for the duration of this call.
-                let status = unsafe {
-                    match self.codec {
-                        Codec::Hevc => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-                            std::ptr::null(),
-                            param_sets.len(),
-                            ptrs.as_ptr(),
-                            sizes.as_ptr(),
-                            4, // 4-byte length prefix (HVCC)
-                            std::ptr::null(),
-                            &raw mut fmt_desc,
-                        ),
-                        Codec::H264 => CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                            std::ptr::null(),
-                            param_sets.len(),
-                            ptrs.as_ptr(),
-                            sizes.as_ptr(),
-                            4, // 4-byte length prefix (AVCC)
-                            &raw mut fmt_desc,
-                        ),
-                    }
-                };
-                if status != 0 || fmt_desc.is_null() {
-                    let codec_name = match self.codec {
-                        Codec::Hevc => "HEVC",
-                        Codec::H264 => "H.264",
-                    };
-                    return Err(VideoError::DecodingFailed {
-                        reason: format!(
-                            "CMVideoFormatDescriptionCreateFrom{codec_name}ParameterSets failed: {status}"
-                        ),
-                    });
+            let mut fmt_desc: *mut c_void = std::ptr::null_mut();
+            // SAFETY: ptrs and sizes are valid for the duration of this call.
+            let status = unsafe {
+                match self.codec {
+                    Codec::Hevc => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                        std::ptr::null(),
+                        param_sets.len(),
+                        ptrs.as_ptr(),
+                        sizes.as_ptr(),
+                        4, // 4-byte length prefix (HVCC)
+                        std::ptr::null(),
+                        &raw mut fmt_desc,
+                    ),
+                    Codec::H264 => CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                        std::ptr::null(),
+                        param_sets.len(),
+                        ptrs.as_ptr(),
+                        sizes.as_ptr(),
+                        4, // 4-byte length prefix (AVCC)
+                        &raw mut fmt_desc,
+                    ),
                 }
-
-                let callback_record = VtOutputCallbackRecord {
-                    callback: decode_callback,
-                    ref_con: std::ptr::null_mut(),
+            };
+            if status != 0 || fmt_desc.is_null() {
+                let codec_name = match self.codec {
+                    Codec::Hevc => "HEVC",
+                    Codec::H264 => "H.264",
                 };
-
-                let mut session: *mut c_void = std::ptr::null_mut();
-                // SAFETY: fmt_desc is valid; callback_record lives for this call.
-                let status = unsafe {
-                    VTDecompressionSessionCreate(
-                        std::ptr::null(),
-                        fmt_desc,
-                        std::ptr::null(),
-                        std::ptr::null(),
-                        &raw const callback_record,
-                        &raw mut session,
-                    )
-                };
-                if status != 0 || session.is_null() {
-                    // SAFETY: fmt_desc was successfully created above.
-                    unsafe { CFRelease(fmt_desc.cast()) };
-                    return Err(VideoError::DecodingFailed {
-                        reason: format!("VTDecompressionSessionCreate failed: {status}"),
-                    });
-                }
-
-                self.format_description = fmt_desc;
-                self.session = session;
-                tracing::debug!("VtDecoder: {:?} session initialized", self.codec);
-                return Ok(());
+                return Err(VideoError::DecodingFailed {
+                    reason: format!(
+                        "CMVideoFormatDescriptionCreateFrom{codec_name}ParameterSets failed: {status}"
+                    ),
+                });
             }
 
-            // Without hw-codec-tests, the session cannot be created.
-            Err(VideoError::DecodingFailed {
-                reason: "hardware VideoToolbox decode requires --features hw-codec-tests"
-                    .to_string(),
-            })
+            let callback_record = VtOutputCallbackRecord {
+                callback: decode_callback,
+                ref_con: std::ptr::null_mut(),
+            };
+
+            let mut session: *mut c_void = std::ptr::null_mut();
+            // SAFETY: fmt_desc is valid; callback_record lives for this call.
+            let status = unsafe {
+                VTDecompressionSessionCreate(
+                    std::ptr::null(),
+                    fmt_desc,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &raw const callback_record,
+                    &raw mut session,
+                )
+            };
+            if status != 0 || session.is_null() {
+                // SAFETY: fmt_desc was successfully created above.
+                unsafe { CFRelease(fmt_desc.cast()) };
+                return Err(VideoError::DecodingFailed {
+                    reason: format!("VTDecompressionSessionCreate failed: {status}"),
+                });
+            }
+
+            self.format_description = fmt_desc;
+            self.session = session;
+            tracing::debug!("VtDecoder: {:?} session initialized", self.codec);
+            Ok(())
         }
 
         /// Submits one length-prefixed packet to the active session and collects the
         /// decoded `CVPixelBuffer` via the synchronous callback path.
-        ///
-        /// Only available with `--features hw-codec-tests`.
-        #[cfg(feature = "hw-codec-tests")]
         fn decode_packet(
             &mut self,
             packet: &EncodedPacket,
@@ -567,9 +539,6 @@ mod macos {
         ///
         /// No CPU copy occurs — the `IOSurface` is `CFRetain`ed and handed to
         /// the renderer, which imports it as a Metal texture.
-        ///
-        /// Only available with `--features hw-codec-tests`.
-        #[cfg(feature = "hw-codec-tests")]
         #[allow(clippy::cast_possible_truncation)] // pixel dimensions fit in u32 for any real frame
         fn pixel_buffer_to_frame(
             pixel_buffer: *mut c_void,
@@ -620,19 +589,10 @@ mod macos {
             if !self.is_session_ready() {
                 self.init_session(packet)?;
             }
-            #[cfg(feature = "hw-codec-tests")]
-            {
-                return self.decode_packet(packet);
-            }
-            // Without hw-codec-tests, init_session always returns Err before reaching here.
-            #[cfg(not(feature = "hw-codec-tests"))]
-            {
-                Ok(None)
-            }
+            self.decode_packet(packet)
         }
 
         fn flush(&mut self) -> Result<Vec<DecodedFrame>, VideoError> {
-            #[cfg(feature = "hw-codec-tests")]
             if !self.session.is_null() {
                 // SAFETY: session is valid.
                 unsafe { VTDecompressionSessionWaitForAsynchronousFrames(self.session) };
@@ -648,8 +608,7 @@ mod macos {
     impl Drop for VtDecoder {
         fn drop(&mut self) {
             // SAFETY: session and format_description are valid non-null pointers
-            // that must be released. In non-hw-codec-tests builds they are always null.
-            #[cfg(feature = "hw-codec-tests")]
+            // that must be released.
             unsafe {
                 if !self.session.is_null() {
                     VTDecompressionSessionInvalidate(self.session);
