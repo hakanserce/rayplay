@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use rayplay_core::pairing::TrustDatabase;
+use rayplay_core::session::{ClientIntent, ControlMessage, SessionError};
 use rayplay_network::{QuicVideoTransport, host_auth_challenge, host_pairing};
 use tokio_util::sync::CancellationToken;
 
@@ -23,48 +24,74 @@ pub(crate) async fn authenticate_and_stream(
         .await
         .map_err(|e| anyhow::anyhow!("failed to accept control channel: {e}"))?;
 
-    // Try auth challenge first (trusted client reconnection)
-    {
-        let mut db = trust_db.lock().await;
-        match host_auth_challenge(&mut control, &mut db).await {
-            Ok(client) => {
-                tracing::info!(client_id = %client.client_id, "Trusted client authenticated");
-                drop(db);
-                save_trust_db_if_possible(&trust_db).await;
-                return stream(transport, config, token).await;
-            }
-            Err(e) => {
-                tracing::info!(error = %e, "Auth challenge failed, falling back to PIN pairing");
-            }
+    // Wait for ClientHello first to determine intent
+    let intent = match recv_msg(&mut control, "hello").await {
+        Ok(ControlMessage::ClientHello(intent)) => intent,
+        Ok(other) => {
+            return Err(anyhow::anyhow!("expected ClientHello, got {other:?}"));
         }
-    }
-
-    // Fall back to PIN pairing
-    let pin = rayplay_core::pairing::generate_pin();
-    tracing::info!("────────────────────────────────────");
-    tracing::info!("  Pairing PIN: {pin}");
-    tracing::info!("  Enter this PIN on the client.");
-    tracing::info!("────────────────────────────────────");
-
-    let client = {
-        let mut db = trust_db.lock().await;
-        host_pairing(&mut control, &pin, &mut db, "unknown-client")
-            .await
-            .map_err(|e| anyhow::anyhow!("pairing failed: {e}"))?
+        Err(e) => {
+            return Err(anyhow::anyhow!("failed to receive ClientHello: {e}"));
+        }
     };
 
-    tracing::info!(client_id = %client.client_id, "Client paired successfully");
-    save_trust_db_if_possible(&trust_db).await;
+    match intent {
+        ClientIntent::Auth => {
+            // Try authentication
+            let mut db = trust_db.lock().await;
+            match host_auth_challenge(&mut control, &mut db).await {
+                Ok(client) => {
+                    tracing::info!(client_id = %client.client_id, "Trusted client authenticated");
+                    drop(db);
+                    save_trust_db_if_possible(&trust_db).await;
+                    stream(transport, config, token).await
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Authentication failed");
+                    Err(anyhow::anyhow!("authentication failed: {e}"))
+                }
+            }
+        }
+        ClientIntent::Pair => {
+            // Perform PIN pairing
+            let pin = rayplay_core::pairing::generate_pin();
+            tracing::info!("────────────────────────────────────");
+            tracing::info!("  Pairing PIN: {pin}");
+            tracing::info!("  Enter this PIN on the client.");
+            tracing::info!("────────────────────────────────────");
 
-    stream(transport, config, token).await
+            let client = {
+                let mut db = trust_db.lock().await;
+                host_pairing(&mut control, &pin, &mut db, "unknown-client")
+                    .await
+                    .map_err(|e| anyhow::anyhow!("pairing failed: {e}"))?
+            };
+
+            tracing::info!(client_id = %client.client_id, "Client paired successfully");
+            save_trust_db_if_possible(&trust_db).await;
+
+            stream(transport, config, token).await
+        }
+    }
 }
 
 /// Best-effort save of the trust database to disk.
-async fn save_trust_db_if_possible(
-    trust_db: &std::sync::Arc<tokio::sync::Mutex<TrustDatabase>>,
-) {
+async fn save_trust_db_if_possible(trust_db: &std::sync::Arc<tokio::sync::Mutex<TrustDatabase>>) {
     let db = trust_db.lock().await;
     if let Err(e) = rayplay_network::trust_store::save_trust_db(&db) {
         tracing::warn!(error = %e, "Failed to persist trust database");
+    }
+}
+
+async fn recv_msg(
+    control: &mut rayplay_network::ControlChannel,
+    operation: &str,
+) -> Result<ControlMessage, SessionError> {
+    match control.receiver.recv().await {
+        Ok(Some(msg)) => Ok(msg),
+        Ok(None) => Err(SessionError::PairingFailed(format!(
+            "stream closed during {operation}"
+        ))),
+        Err(e) => Err(SessionError::Transport(e.to_string())),
     }
 }

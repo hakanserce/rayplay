@@ -16,6 +16,7 @@ pub mod fragmenter;
 pub mod handshake;
 pub mod keepalive;
 pub mod pairing;
+pub(crate) mod platform_dirs;
 pub mod reassembler;
 pub mod transport;
 pub(crate) mod transport_tls;

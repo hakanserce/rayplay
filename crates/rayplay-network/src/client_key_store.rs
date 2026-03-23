@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use ed25519_dalek::SigningKey;
 
+use crate::platform_dirs;
 use crate::wire::TransportError;
 
 /// Returns the platform-specific path for the client signing key file.
@@ -18,16 +19,10 @@ use crate::wire::TransportError;
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] if the home directory cannot be
+/// Returns [`TransportError::StorageError`] if the home directory cannot be
 /// determined.
 pub fn client_key_path() -> Result<PathBuf, TransportError> {
-    let base = if cfg!(target_os = "macos") {
-        dirs_path_macos()?
-    } else if cfg!(target_os = "windows") {
-        dirs_path_windows()?
-    } else {
-        dirs_path_linux()?
-    };
+    let base = platform_dirs::config_dir()?;
     Ok(base.join("client_key.bin"))
 }
 
@@ -37,19 +32,16 @@ pub fn client_key_path() -> Result<PathBuf, TransportError> {
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] on I/O or key-format errors.
+/// Returns [`TransportError::StorageError`] on I/O or key-format errors.
 pub fn load_client_key() -> Result<Option<SigningKey>, TransportError> {
     let path = client_key_path()?;
     if !path.exists() {
         return Ok(None);
     }
-    let bytes =
-        std::fs::read(&path).map_err(|e| TransportError::TlsError(e.to_string()))?;
-    let arr: [u8; 32] = bytes
-        .try_into()
-        .map_err(|v: Vec<u8>| {
-            TransportError::TlsError(format!("expected 32 bytes, got {}", v.len()))
-        })?;
+    let bytes = std::fs::read(&path).map_err(|e| TransportError::StorageError(e.to_string()))?;
+    let arr: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
+        TransportError::StorageError(format!("expected 32 bytes, got {}", v.len()))
+    })?;
     Ok(Some(SigningKey::from_bytes(&arr)))
 }
 
@@ -59,37 +51,22 @@ pub fn load_client_key() -> Result<Option<SigningKey>, TransportError> {
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] on I/O errors.
+/// Returns [`TransportError::StorageError`] on I/O errors.
 pub fn save_client_key(key: &SigningKey) -> Result<(), TransportError> {
     let path = client_key_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| TransportError::TlsError(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(|e| TransportError::StorageError(e.to_string()))?;
     }
-    std::fs::write(&path, key.to_bytes()).map_err(|e| TransportError::TlsError(e.to_string()))
-}
+    std::fs::write(&path, key.to_bytes())
+        .map_err(|e| TransportError::StorageError(e.to_string()))?;
 
-fn dirs_path_macos() -> Result<PathBuf, TransportError> {
-    let home = std::env::var("HOME").map_err(|_| {
-        TransportError::TlsError("cannot determine home directory".to_string())
-    })?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("RayPlay"))
-}
+    // Set file permissions to 0600 on Unix systems
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| TransportError::StorageError(e.to_string()))?;
+    }
 
-fn dirs_path_windows() -> Result<PathBuf, TransportError> {
-    let appdata = std::env::var("APPDATA").map_err(|_| {
-        TransportError::TlsError("cannot determine APPDATA directory".to_string())
-    })?;
-    Ok(PathBuf::from(appdata).join("RayPlay"))
-}
-
-fn dirs_path_linux() -> Result<PathBuf, TransportError> {
-    let config = std::env::var("XDG_CONFIG_HOME").or_else(|_| {
-        std::env::var("HOME").map(|home| format!("{home}/.config"))
-    }).map_err(|_| {
-        TransportError::TlsError("cannot determine config directory".to_string())
-    })?;
-    Ok(PathBuf::from(config).join("rayplay"))
+    Ok(())
 }

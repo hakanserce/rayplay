@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use rayplay_core::pairing::TrustDatabase;
 
+use crate::platform_dirs;
 use crate::wire::TransportError;
 
 /// Returns the platform-specific path for the trust database file.
@@ -18,16 +19,10 @@ use crate::wire::TransportError;
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] if the home directory cannot be
+/// Returns [`TransportError::StorageError`] if the home directory cannot be
 /// determined.
 pub fn trust_db_path() -> Result<PathBuf, TransportError> {
-    let base = if cfg!(target_os = "macos") {
-        dirs_path_macos()?
-    } else if cfg!(target_os = "windows") {
-        dirs_path_windows()?
-    } else {
-        dirs_path_linux()?
-    };
+    let base = platform_dirs::config_dir()?;
     Ok(base.join("trusted_clients.json"))
 }
 
@@ -37,15 +32,15 @@ pub fn trust_db_path() -> Result<PathBuf, TransportError> {
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] on I/O or parse errors.
+/// Returns [`TransportError::StorageError`] on I/O or parse errors.
 pub fn load_trust_db() -> Result<TrustDatabase, TransportError> {
     let path = trust_db_path()?;
     if !path.exists() {
         return Ok(TrustDatabase::new());
     }
     let json =
-        std::fs::read_to_string(&path).map_err(|e| TransportError::TlsError(e.to_string()))?;
-    TrustDatabase::from_json(&json).map_err(|e| TransportError::TlsError(e.to_string()))
+        std::fs::read_to_string(&path).map_err(|e| TransportError::StorageError(e.to_string()))?;
+    TrustDatabase::from_json(&json).map_err(|e| TransportError::StorageError(e.to_string()))
 }
 
 /// Saves the trust database to the default path.
@@ -54,40 +49,24 @@ pub fn load_trust_db() -> Result<TrustDatabase, TransportError> {
 ///
 /// # Errors
 ///
-/// Returns [`TransportError::TlsError`] on I/O or serialization errors.
+/// Returns [`TransportError::StorageError`] on I/O or serialization errors.
 pub fn save_trust_db(db: &TrustDatabase) -> Result<(), TransportError> {
     let path = trust_db_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| TransportError::TlsError(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(|e| TransportError::StorageError(e.to_string()))?;
     }
     let json = db
         .to_json()
-        .map_err(|e| TransportError::TlsError(e.to_string()))?;
-    std::fs::write(&path, json).map_err(|e| TransportError::TlsError(e.to_string()))
-}
+        .map_err(|e| TransportError::StorageError(e.to_string()))?;
+    std::fs::write(&path, json).map_err(|e| TransportError::StorageError(e.to_string()))?;
 
-fn dirs_path_macos() -> Result<PathBuf, TransportError> {
-    let home = std::env::var("HOME").map_err(|_| {
-        TransportError::TlsError("cannot determine home directory".to_string())
-    })?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("RayPlay"))
-}
+    // Set file permissions to 0600 on Unix systems
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| TransportError::StorageError(e.to_string()))?;
+    }
 
-fn dirs_path_windows() -> Result<PathBuf, TransportError> {
-    let appdata = std::env::var("APPDATA").map_err(|_| {
-        TransportError::TlsError("cannot determine APPDATA directory".to_string())
-    })?;
-    Ok(PathBuf::from(appdata).join("RayPlay"))
-}
-
-fn dirs_path_linux() -> Result<PathBuf, TransportError> {
-    let config = std::env::var("XDG_CONFIG_HOME").or_else(|_| {
-        std::env::var("HOME").map(|home| format!("{home}/.config"))
-    }).map_err(|_| {
-        TransportError::TlsError("cannot determine config directory".to_string())
-    })?;
-    Ok(PathBuf::from(config).join("rayplay"))
+    Ok(())
 }
