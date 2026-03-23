@@ -457,26 +457,22 @@ impl WgpuRenderer {
 impl Renderer for WgpuRenderer {
     fn present_frame(&mut self, frame: &DecodedFrame) -> Result<(), RenderError> {
         // ── IOSurface zero-copy path (macOS hardware frames) ────────────
+        #[allow(unused_mut)]
+        let mut hw_bind_group: Option<wgpu::BindGroup> = None;
+
         #[cfg(target_os = "macos")]
-        let hw_bind_group = if frame.is_hardware_frame {
+        if frame.is_hardware_frame {
             if let Some(ref handle) = frame.iosurface {
-                let bg = self.import_iosurface_textures(handle, frame.width, frame.height);
-                if bg.is_none() {
+                hw_bind_group = self.import_iosurface_textures(handle, frame.width, frame.height);
+                if hw_bind_group.is_none() {
                     tracing::warn!("IOSurface import failed; falling back to clear-only render");
                 }
-                bg
             } else {
                 tracing::warn!(
                     "hardware frame missing IOSurface handle; falling back to clear-only render"
                 );
-                None
             }
-        } else {
-            None
-        };
-
-        #[cfg(not(target_os = "macos"))]
-        let hw_bind_group: Option<wgpu::BindGroup> = None;
+        }
 
         // ── CPU upload path (software frames) ───────────────────────────
         if hw_bind_group.is_none() && !frame.is_hardware_frame {

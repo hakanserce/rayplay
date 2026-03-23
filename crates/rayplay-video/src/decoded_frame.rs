@@ -1,66 +1,72 @@
-#[cfg(target_os = "macos")]
-use std::ffi::c_void;
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn CFRetain(cf: *const c_void) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-}
+// ── IoSurfaceHandle — platform-specific implementation ───────────────────────
 
 /// RAII wrapper for a retained `IOSurfaceRef` (macOS).
 ///
-/// Calls `CFRetain` on creation and `CFRelease` on drop. Cloning retains again.
-/// The inner pointer is `Send + Sync` — `IOSurface` is a kernel-managed
-/// shared-memory object safe to reference from any thread.
-#[cfg(target_os = "macos")]
+/// On macOS, calls `CFRetain` on creation and `CFRelease` on drop.
+/// On other platforms, this is an uninhabited stub — `Option<IoSurfaceHandle>`
+/// is always `None` and the type compiles away to zero cost.
 #[derive(Debug)]
+#[cfg(target_os = "macos")]
 pub struct IoSurfaceHandle {
-    ptr: *mut c_void,
+    ptr: *mut std::ffi::c_void,
 }
 
 #[cfg(target_os = "macos")]
-impl IoSurfaceHandle {
-    /// Wraps an already-retained `IOSurfaceRef`. The caller must have called
-    /// `CFRetain` (or equivalent) before handing the pointer here.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must be a valid, retained `IOSurfaceRef`.
-    #[must_use]
-    pub unsafe fn from_retained(ptr: *mut c_void) -> Self {
-        Self { ptr }
+mod iosurface_impl {
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn CFRetain(cf: *const c_void) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
     }
 
-    /// Returns the raw `IOSurfaceRef` pointer.
-    #[must_use]
-    pub fn as_ptr(&self) -> *mut c_void {
-        self.ptr
+    use super::IoSurfaceHandle;
+
+    impl IoSurfaceHandle {
+        /// Wraps an already-retained `IOSurfaceRef`.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must be a valid, retained `IOSurfaceRef`.
+        #[must_use]
+        pub unsafe fn from_retained(ptr: *mut c_void) -> Self {
+            Self { ptr }
+        }
+
+        /// Returns the raw `IOSurfaceRef` pointer.
+        #[must_use]
+        pub fn as_ptr(&self) -> *mut c_void {
+            self.ptr
+        }
     }
+
+    impl Clone for IoSurfaceHandle {
+        fn clone(&self) -> Self {
+            unsafe { CFRetain(self.ptr.cast_const()) };
+            Self { ptr: self.ptr }
+        }
+    }
+
+    impl Drop for IoSurfaceHandle {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.ptr.cast_const()) };
+        }
+    }
+
+    // SAFETY: IOSurface is a kernel-managed shared-memory object, safe from any thread.
+    unsafe impl Send for IoSurfaceHandle {}
+    unsafe impl Sync for IoSurfaceHandle {}
 }
 
-#[cfg(target_os = "macos")]
-impl Clone for IoSurfaceHandle {
-    fn clone(&self) -> Self {
-        // SAFETY: ptr is a valid IOSurfaceRef; CFRetain returns the same pointer.
-        unsafe { CFRetain(self.ptr.cast_const()) };
-        Self { ptr: self.ptr }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for IoSurfaceHandle {
-    fn drop(&mut self) {
-        // SAFETY: ptr was retained on creation (and on each clone).
-        unsafe { CFRelease(self.ptr.cast_const()) };
-    }
-}
-
-// SAFETY: IOSurface is a kernel-managed shared-memory object. The underlying
-// surface is reference-counted and safe to access from any thread.
-#[cfg(target_os = "macos")]
-unsafe impl Send for IoSurfaceHandle {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for IoSurfaceHandle {}
+/// Stub `IoSurfaceHandle` for non-macOS platforms.
+///
+/// This type exists so `DecodedFrame` can have an unconditional
+/// `iosurface: Option<IoSurfaceHandle>` field. The type is uninhabited
+/// (has no constructors), so `Option<IoSurfaceHandle>` is always `None`
+/// and optimises to zero size.
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+pub enum IoSurfaceHandle {}
 
 /// Pixel format of a decoded video frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,9 +81,6 @@ pub enum PixelFormat {
 
 impl PixelFormat {
     /// Returns the bytes per pixel for packed formats, or `None` for planar formats.
-    ///
-    /// `Nv12` returns `None` because its byte count depends on frame dimensions;
-    /// use `DecodedFrame::expected_data_size` instead.
     #[must_use]
     pub fn bytes_per_pixel(&self) -> Option<usize> {
         match self {
@@ -94,13 +97,9 @@ impl PixelFormat {
 /// GPU-resident memory; the renderer imports it via `IOSurface` interop (ADR-005)
 /// rather than uploading via `write_texture`.
 ///
-/// # Field Visibility
-///
-/// All fields are `pub` for direct access by the renderer (UC-005). The two
-/// constructors (`new_cpu`, `new_hardware`) are the canonical way to create a
-/// frame and enforce the `is_hardware_frame ↔ data.is_empty()` invariant, but
-/// the invariant is not enforced at the type level — callers must not mutate
-/// fields directly in a way that breaks it.
+/// The `iosurface` field is always present in the struct definition. On non-macOS
+/// platforms `IoSurfaceHandle` is uninhabited, so `Option<IoSurfaceHandle>` is
+/// always `None` and compiles to zero size.
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {
     /// Decoded pixel data. Empty when `is_hardware_frame` is `true`.
@@ -118,7 +117,7 @@ pub struct DecodedFrame {
     /// Whether the frame is backed by GPU-resident `IOSurface` memory (macOS).
     pub is_hardware_frame: bool,
     /// Retained `IOSurface` handle for zero-copy GPU rendering (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Always `None` on non-macOS platforms.
     pub iosurface: Option<IoSurfaceHandle>,
 }
 
@@ -141,7 +140,6 @@ impl DecodedFrame {
             format,
             timestamp_us,
             is_hardware_frame: false,
-            #[cfg(target_os = "macos")]
             iosurface: None,
         }
     }
@@ -172,11 +170,11 @@ impl DecodedFrame {
         }
     }
 
-    /// Creates a hardware-backed frame stub for testing (macOS only).
+    /// Creates a hardware-backed frame stub for testing.
     ///
     /// Sets `iosurface` to `None`. Used by unit tests that do not have a real
     /// `IOSurface`. The renderer falls back to a clear-only render pass.
-    #[cfg(all(target_os = "macos", test))]
+    #[cfg(test)]
     #[must_use]
     pub fn new_hardware_test_stub(
         width: u32,
