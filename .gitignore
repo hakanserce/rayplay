@@ -2,6 +2,7 @@
 .claude/worktrees
 .claude/audit.log
 .claude/memory/
+.claude/projects/
 .env
 *.env.*
 *.key
