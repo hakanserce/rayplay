@@ -139,38 +139,35 @@ async fn stream_windows_zero_copy(
 }
 
 /// Builds the capturer + encoder pair using the platform-appropriate path.
+#[allow(clippy::unused_async)] // async needed on macOS for screen recording permission check
 async fn build_generic_pipeline(
     config: &HostConfig,
 ) -> Result<(
     Box<dyn rayplay_video::capture::ScreenCapturer>,
     Box<dyn rayplay_video::encoder::VideoEncoder>,
 )> {
+    use rayplay_video::{
+        CaptureConfig, create_capturer,
+        encoder::{EncoderConfig, create_encoder},
+    };
+
+    // macOS requires a screen recording permission check before capture.
     #[cfg(target_os = "macos")]
-    {
-        crate::host_capture_macos::prepare_pipeline(config).await
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        use rayplay_video::{
-            CaptureConfig, create_capturer,
-            encoder::{EncoderConfig, create_encoder},
-        };
+    crate::host_capture_macos::wait_for_screen_recording_permission().await?;
 
-        let cap_config = CaptureConfig {
-            target_fps: config.encoder_config.fps,
-            acquire_timeout_ms: 100,
-        };
-        let capturer =
-            create_capturer(cap_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
-        let (cap_width, cap_height) = capturer.resolution();
+    let cap_config = CaptureConfig {
+        target_fps: config.encoder_config.fps,
+        acquire_timeout_ms: 100,
+    };
+    let capturer =
+        create_capturer(cap_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
+    let (cap_width, cap_height) = capturer.resolution();
 
-        let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
-            .with_bitrate(config.encoder_config.bitrate.clone());
-        let encoder =
-            create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
+    let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
+        .with_bitrate(config.encoder_config.bitrate.clone());
+    let encoder = create_encoder(enc_config, config.pipeline_mode).map_err(anyhow::Error::from)?;
 
-        Ok((capturer, encoder))
-    }
+    Ok((capturer, encoder))
 }
 
 /// Runs the codec handshake and then streams using the generic (boxed) pipeline.
