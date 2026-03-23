@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use rayplay_core::pairing::TrustDatabase;
-use rayplay_core::session::{ClientIntent, ControlMessage, SessionError};
+use rayplay_core::session::{ClientIntent, ControlMessage};
 use rayplay_network::{QuicVideoTransport, host_auth_challenge, host_pairing};
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +25,7 @@ pub(crate) async fn authenticate_and_stream(
         .map_err(|e| anyhow::anyhow!("failed to accept control channel: {e}"))?;
 
     // Wait for ClientHello first to determine intent
-    let intent = match recv_msg(&mut control, "hello").await {
+    let intent = match control.recv_msg("hello").await {
         Ok(ControlMessage::ClientHello(intent)) => intent,
         Ok(other) => {
             return Err(anyhow::anyhow!("expected ClientHello, got {other:?}"));
@@ -80,18 +80,5 @@ async fn save_trust_db_if_possible(trust_db: &std::sync::Arc<tokio::sync::Mutex<
     let db = trust_db.lock().await;
     if let Err(e) = rayplay_network::trust_store::save_trust_db(&db) {
         tracing::warn!(error = %e, "Failed to persist trust database");
-    }
-}
-
-async fn recv_msg(
-    control: &mut rayplay_network::ControlChannel,
-    operation: &str,
-) -> Result<ControlMessage, SessionError> {
-    match control.receiver.recv().await {
-        Ok(Some(msg)) => Ok(msg),
-        Ok(None) => Err(SessionError::PairingFailed(format!(
-            "stream closed during {operation}"
-        ))),
-        Err(e) => Err(SessionError::Transport(e.to_string())),
     }
 }

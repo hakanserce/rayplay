@@ -5,7 +5,7 @@
 //! stream.
 
 use quinn::{RecvStream, SendStream};
-use rayplay_core::session::ControlMessage;
+use rayplay_core::session::{ControlMessage, SessionError};
 
 use crate::wire::TransportError;
 
@@ -107,6 +107,36 @@ impl ControlReceiver {
             .map_err(|e| TransportError::MessageParse(e.to_string()))?;
 
         Ok(Some(msg))
+    }
+}
+
+impl ControlChannel {
+    /// Receives a control message with context for error messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::PairingFailed`] if the stream was closed,
+    /// or [`SessionError::Transport`] on transport errors.
+    pub async fn recv_msg(&mut self, operation: &str) -> Result<ControlMessage, SessionError> {
+        match self.receiver.recv().await {
+            Ok(Some(msg)) => Ok(msg),
+            Ok(None) => Err(SessionError::PairingFailed(format!(
+                "stream closed during {operation}"
+            ))),
+            Err(e) => Err(SessionError::Transport(e.to_string())),
+        }
+    }
+
+    /// Sends a control message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Transport`] on transport errors.
+    pub async fn send_msg(&mut self, msg: &ControlMessage) -> Result<(), SessionError> {
+        self.sender
+            .send(msg)
+            .await
+            .map_err(|e| SessionError::Transport(e.to_string()))
     }
 }
 

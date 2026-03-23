@@ -38,9 +38,12 @@ pub fn load_trust_db() -> Result<TrustDatabase, TransportError> {
     if !path.exists() {
         return Ok(TrustDatabase::new());
     }
-    let json =
-        std::fs::read_to_string(&path).map_err(|e| TransportError::StorageError(e.to_string()))?;
-    TrustDatabase::from_json(&json).map_err(|e| TransportError::StorageError(e.to_string()))
+    let json = std::fs::read_to_string(&path).map_err(|e| {
+        TransportError::StorageError(format!("failed to read {}: {e}", path.display()))
+    })?;
+    TrustDatabase::from_json(&json).map_err(|e| {
+        TransportError::StorageError(format!("failed to parse {}: {e}", path.display()))
+    })
 }
 
 /// Saves the trust database to the default path.
@@ -53,19 +56,30 @@ pub fn load_trust_db() -> Result<TrustDatabase, TransportError> {
 pub fn save_trust_db(db: &TrustDatabase) -> Result<(), TransportError> {
     let path = trust_db_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| TransportError::StorageError(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            TransportError::StorageError(format!(
+                "failed to create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
     }
-    let json = db
-        .to_json()
-        .map_err(|e| TransportError::StorageError(e.to_string()))?;
-    std::fs::write(&path, json).map_err(|e| TransportError::StorageError(e.to_string()))?;
+    let json = db.to_json().map_err(|e| {
+        TransportError::StorageError(format!("failed to serialize trust database: {e}"))
+    })?;
+    std::fs::write(&path, json).map_err(|e| {
+        TransportError::StorageError(format!("failed to write {}: {e}", path.display()))
+    })?;
 
     // Set file permissions to 0600 on Unix systems
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| TransportError::StorageError(e.to_string()))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            TransportError::StorageError(format!(
+                "failed to set permissions on {}: {e}",
+                path.display()
+            ))
+        })?;
     }
 
     Ok(())

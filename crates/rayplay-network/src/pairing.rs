@@ -4,6 +4,7 @@
 //! and a challenge-response protocol for previously-paired clients.
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use hmac::Mac;
 use rayplay_core::pairing::{TrustDatabase, TrustedClient, encode_public_key};
 use rayplay_core::session::{ClientIntent, ControlMessage, PairingOutcome, SessionError};
 use spake2::{Ed25519Group, Identity, Password, Spake2};
@@ -34,7 +35,7 @@ pub async fn host_pairing(
     client_id: &str,
 ) -> Result<TrustedClient, SessionError> {
     // 1. Wait for PairingRequest(client_spake2_msg)
-    let client_msg = match recv_msg(control, "pairing").await? {
+    let client_msg = match control.recv_msg("pairing").await? {
         ControlMessage::PairingRequest(msg) => msg,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -51,7 +52,9 @@ pub async fn host_pairing(
     );
 
     // 3. Send PairingResponse(host_spake2_msg)
-    send_msg(control, &ControlMessage::PairingResponse(host_msg)).await?;
+    control
+        .send_msg(&ControlMessage::PairingResponse(host_msg))
+        .await?;
 
     // 4. Complete SPAKE2 and derive shared key
     let host_key = state
@@ -59,7 +62,7 @@ pub async fn host_pairing(
         .map_err(|e| SessionError::PairingFailed(format!("SPAKE2 finish failed: {e}")))?;
 
     // 5. Wait for PairingConfirm(pubkey + hmac)
-    let confirm_payload = match recv_msg(control, "pairing").await? {
+    let confirm_payload = match control.recv_msg("pairing").await? {
         ControlMessage::PairingConfirm(payload) => payload,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -71,16 +74,28 @@ pub async fn host_pairing(
     // 6. Validate confirm payload: pubkey(32) + hmac(32)
     if confirm_payload.len() != 64 {
         let outcome = PairingOutcome::Rejected("Invalid payload length".to_string());
-        send_msg(control, &ControlMessage::PairingResult(outcome)).await?;
+        control
+            .send_msg(&ControlMessage::PairingResult(outcome))
+            .await?;
         return Err(SessionError::PairingFailed(
             "invalid confirm payload length".to_string(),
         ));
     }
     let (pubkey_bytes, received_hmac) = confirm_payload.split_at(32);
-    let expected_hmac = simple_hmac(&host_key, pubkey_bytes);
-    if received_hmac != expected_hmac.as_slice() {
+
+    // Convert host_key to fixed-size array for HMAC functions
+    let host_key_array: [u8; 32] = host_key
+        .try_into()
+        .map_err(|_| SessionError::PairingFailed("host key must be 32 bytes".to_string()))?;
+
+    if compute_hmac(&host_key_array, pubkey_bytes)
+        .verify_slice(received_hmac)
+        .is_err()
+    {
         let outcome = PairingOutcome::Rejected("PIN mismatch".to_string());
-        send_msg(control, &ControlMessage::PairingResult(outcome)).await?;
+        control
+            .send_msg(&ControlMessage::PairingResult(outcome))
+            .await?;
         return Err(SessionError::PairingFailed("PIN mismatch".to_string()));
     }
 
@@ -92,9 +107,14 @@ pub async fn host_pairing(
         .map_err(|e| SessionError::PairingFailed(format!("invalid public key: {e}")))?;
     let encoded_key = encode_public_key(&verifying_key);
 
+    let client_label = if client_id == "unknown-client" {
+        default_client_label()
+    } else {
+        client_id.to_string()
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let trusted_client = TrustedClient {
-        client_id: client_id.to_string(),
+        client_id: client_label,
         public_key: encoded_key,
         paired_at: now.clone(),
         last_seen: now,
@@ -103,7 +123,9 @@ pub async fn host_pairing(
 
     // 8. Send successful result
     let outcome = PairingOutcome::Accepted;
-    send_msg(control, &ControlMessage::PairingResult(outcome)).await?;
+    control
+        .send_msg(&ControlMessage::PairingResult(outcome))
+        .await?;
 
     Ok(trusted_client)
 }
@@ -122,7 +144,9 @@ pub async fn client_pairing(
     pin: &str,
 ) -> Result<SigningKey, SessionError> {
     // 1. Send ClientHello to declare pairing intent
-    send_msg(control, &ControlMessage::ClientHello(ClientIntent::Pair)).await?;
+    control
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await?;
 
     // 2. Generate ed25519 key pair
     let signing_key = SigningKey::generate(&mut rand_core::OsRng);
@@ -136,10 +160,12 @@ pub async fn client_pairing(
     );
 
     // 4. Send PairingRequest(client_spake2_msg)
-    send_msg(control, &ControlMessage::PairingRequest(client_msg)).await?;
+    control
+        .send_msg(&ControlMessage::PairingRequest(client_msg))
+        .await?;
 
     // 5. Wait for PairingResponse(host_spake2_msg)
-    let host_msg = match recv_msg(control, "pairing").await? {
+    let host_msg = match control.recv_msg("pairing").await? {
         ControlMessage::PairingResponse(msg) => msg,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -155,15 +181,23 @@ pub async fn client_pairing(
 
     // 7. Build confirm payload: pubkey(32) + hmac(32)
     let pubkey_bytes = verifying_key.as_bytes();
-    let hmac = simple_hmac(&client_key, pubkey_bytes);
+
+    // Convert client_key to fixed-size array for HMAC functions
+    let client_key_array: [u8; 32] = client_key
+        .try_into()
+        .map_err(|_| SessionError::PairingFailed("client key must be 32 bytes".to_string()))?;
+
+    let hmac = hmac_bytes(&client_key_array, pubkey_bytes);
     let mut confirm_payload = Vec::with_capacity(64);
     confirm_payload.extend_from_slice(pubkey_bytes);
     confirm_payload.extend_from_slice(&hmac);
 
-    send_msg(control, &ControlMessage::PairingConfirm(confirm_payload)).await?;
+    control
+        .send_msg(&ControlMessage::PairingConfirm(confirm_payload))
+        .await?;
 
     // 8. Wait for PairingResult
-    let result = match recv_msg(control, "pairing").await? {
+    let result = match control.recv_msg("pairing").await? {
         ControlMessage::PairingResult(outcome) => outcome,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -196,10 +230,12 @@ pub async fn host_auth_challenge(
     // 1. Generate and send random nonce
     let mut nonce = [0u8; NONCE_LEN];
     rand::Rng::fill(&mut rand::rng(), &mut nonce);
-    send_msg(control, &ControlMessage::AuthChallenge(nonce.to_vec())).await?;
+    control
+        .send_msg(&ControlMessage::AuthChallenge(nonce.to_vec()))
+        .await?;
 
     // 2. Wait for AuthResponse(pubkey + signature)
-    let response_payload = match recv_msg(control, "auth").await? {
+    let response_payload = match control.recv_msg("auth").await? {
         ControlMessage::AuthResponse(payload) => payload,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -210,7 +246,7 @@ pub async fn host_auth_challenge(
 
     // 3. Parse response: pubkey(32) + signature(64)
     if response_payload.len() != 96 {
-        send_msg(control, &ControlMessage::AuthResult(false)).await?;
+        control.send_msg(&ControlMessage::AuthResult(false)).await?;
         return Err(SessionError::PairingFailed(format!(
             "invalid response length: {} (expected 96)",
             response_payload.len()
@@ -227,7 +263,7 @@ pub async fn host_auth_challenge(
     let encoded_key = encode_public_key(&verifying_key);
 
     if !trust_db.is_trusted(&encoded_key) {
-        send_msg(control, &ControlMessage::AuthResult(false)).await?;
+        control.send_msg(&ControlMessage::AuthResult(false)).await?;
         return Err(SessionError::PairingFailed(
             "client not trusted".to_string(),
         ));
@@ -237,7 +273,7 @@ pub async fn host_auth_challenge(
     let signature = ed25519_dalek::Signature::from_slice(signature_bytes)
         .map_err(|e| SessionError::PairingFailed(format!("invalid signature: {e}")))?;
     if verifying_key.verify(&nonce, &signature).is_err() {
-        send_msg(control, &ControlMessage::AuthResult(false)).await?;
+        control.send_msg(&ControlMessage::AuthResult(false)).await?;
         return Err(SessionError::PairingFailed(
             "signature verification failed".to_string(),
         ));
@@ -251,7 +287,7 @@ pub async fn host_auth_challenge(
             SessionError::PairingFailed("client disappeared from trust database".to_string())
         })?
         .clone();
-    send_msg(control, &ControlMessage::AuthResult(true)).await?;
+    control.send_msg(&ControlMessage::AuthResult(true)).await?;
 
     Ok(client)
 }
@@ -274,10 +310,12 @@ pub async fn client_auth_response(
     signing_key: &SigningKey,
 ) -> Result<(), SessionError> {
     // 1. Send ClientHello to declare auth intent
-    send_msg(control, &ControlMessage::ClientHello(ClientIntent::Auth)).await?;
+    control
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Auth))
+        .await?;
 
     // 2. Wait for AuthChallenge(nonce)
-    let nonce = match recv_msg(control, "auth").await? {
+    let nonce = match control.recv_msg("auth").await? {
         ControlMessage::AuthChallenge(nonce) => nonce,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -294,10 +332,12 @@ pub async fn client_auth_response(
     let mut response_payload = Vec::with_capacity(96);
     response_payload.extend_from_slice(verifying_key.as_bytes());
     response_payload.extend_from_slice(&signature.to_bytes());
-    send_msg(control, &ControlMessage::AuthResponse(response_payload)).await?;
+    control
+        .send_msg(&ControlMessage::AuthResponse(response_payload))
+        .await?;
 
     // 5. Wait for AuthResult
-    let success = match recv_msg(control, "auth").await? {
+    let success = match control.recv_msg("auth").await? {
         ControlMessage::AuthResult(success) => success,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -317,35 +357,26 @@ pub async fn client_auth_response(
 
 // ── Helper functions ─────────────────────────────────────────────────────────
 
-async fn recv_msg(
-    control: &mut ControlChannel,
-    operation: &str,
-) -> Result<ControlMessage, SessionError> {
-    match control.receiver.recv().await {
-        Ok(Some(msg)) => Ok(msg),
-        Ok(None) => Err(SessionError::PairingFailed(format!(
-            "stream closed during {operation}"
-        ))),
-        Err(e) => Err(SessionError::Transport(e.to_string())),
-    }
-}
-
-async fn send_msg(control: &mut ControlChannel, msg: &ControlMessage) -> Result<(), SessionError> {
-    control
-        .sender
-        .send(msg)
-        .await
-        .map_err(|e| SessionError::Transport(e.to_string()))
-}
-
-/// HMAC-SHA256 message authentication code.
-fn simple_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
-    use hmac::{Hmac, Mac};
+/// Computes HMAC-SHA256 and returns the Mac instance for constant-time verification.
+fn compute_hmac(key: &[u8; 32], data: &[u8]) -> hmac::Hmac<sha2::Sha256> {
+    use hmac::Hmac;
     use sha2::Sha256;
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC can take key of any size");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
     mac.update(data);
-    mac.finalize().into_bytes().into()
+    mac
+}
+
+/// Computes HMAC-SHA256 and returns the raw bytes (for building payloads).
+fn hmac_bytes(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
+    compute_hmac(key, data).finalize().into_bytes().into()
+}
+
+/// Generates a human-readable client label using the username.
+fn default_client_label() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown-client".to_string())
 }
 
 #[cfg(test)]

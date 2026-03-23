@@ -173,17 +173,38 @@ pub async fn connect(
             .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
         super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
     } else {
-        // Normal mode: cert-based connect with reconnect
+        // Normal mode: cert-based connect with challenge-response auth
         let cert_bytes = config.load_cert_bytes()?;
+
+        // Load saved signing key for authentication
+        let signing_key = rayplay_network::client_key_store::load_client_key()
+            .map_err(|e| anyhow::anyhow!("failed to load client key: {e}"))?;
 
         connect_with_reconnect(
             server_addr,
             cert_bytes,
             reconnect_timeout,
             token,
-            |transport, child| {
+            move |transport, child| {
                 let frame_tx = frame_tx.clone();
+                let signing_key = signing_key.clone();
                 async move {
+                    // Authenticate with saved signing key if available
+                    if let Some(ref key) = signing_key {
+                        let mut control = transport
+                            .open_control()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("failed to open control channel: {e}"))?;
+                        rayplay_network::client_auth_response(&mut control, key)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("authentication failed: {e}"))?;
+                        tracing::info!("Authenticated with host");
+                    } else {
+                        tracing::warn!(
+                            "No saved client key found, proceeding without authentication"
+                        );
+                    }
+
                     let decoder = create_decoder(Codec::Hevc, pipeline_mode)
                         .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
                     super::receive::run_receive_loop(transport, decoder, frame_tx, child).await

@@ -38,9 +38,15 @@ pub fn load_client_key() -> Result<Option<SigningKey>, TransportError> {
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&path).map_err(|e| TransportError::StorageError(e.to_string()))?;
+    let bytes = std::fs::read(&path).map_err(|e| {
+        TransportError::StorageError(format!("failed to read {}: {e}", path.display()))
+    })?;
     let arr: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
-        TransportError::StorageError(format!("expected 32 bytes, got {}", v.len()))
+        TransportError::StorageError(format!(
+            "expected 32 bytes in {}, got {}",
+            path.display(),
+            v.len()
+        ))
     })?;
     Ok(Some(SigningKey::from_bytes(&arr)))
 }
@@ -55,17 +61,27 @@ pub fn load_client_key() -> Result<Option<SigningKey>, TransportError> {
 pub fn save_client_key(key: &SigningKey) -> Result<(), TransportError> {
     let path = client_key_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| TransportError::StorageError(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            TransportError::StorageError(format!(
+                "failed to create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
     }
-    std::fs::write(&path, key.to_bytes())
-        .map_err(|e| TransportError::StorageError(e.to_string()))?;
+    std::fs::write(&path, key.to_bytes()).map_err(|e| {
+        TransportError::StorageError(format!("failed to write {}: {e}", path.display()))
+    })?;
 
     // Set file permissions to 0600 on Unix systems
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| TransportError::StorageError(e.to_string()))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            TransportError::StorageError(format!(
+                "failed to set permissions on {}: {e}",
+                path.display()
+            ))
+        })?;
     }
 
     Ok(())

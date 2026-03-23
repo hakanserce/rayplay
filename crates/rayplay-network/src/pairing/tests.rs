@@ -38,7 +38,7 @@ async fn host_dispatch(
     trust_db: &mut TrustDatabase,
     client_id: &str,
 ) -> Result<TrustedClient, SessionError> {
-    let intent = match recv_msg(control, "hello").await? {
+    let intent = match control.recv_msg("hello").await? {
         ControlMessage::ClientHello(intent) => intent,
         other => {
             return Err(SessionError::PairingFailed(format!(
@@ -145,15 +145,14 @@ async fn test_pairing_unexpected_message() {
     });
 
     // Client sends ClientHello correctly
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     // But then sends wrong message
-    send_msg(&mut client_ctrl, &ControlMessage::Keepalive)
+    client_ctrl
+        .send_msg(&ControlMessage::Keepalive)
         .await
         .unwrap();
 
@@ -170,10 +169,11 @@ async fn test_auth_unexpected_message() {
         tokio::spawn(async move { host_auth_challenge(&mut server_ctrl, &mut trust_db).await });
 
     // Client sends wrong message instead of AuthResponse
-    let nonce = recv_msg(&mut client_ctrl, "test").await.unwrap();
+    let nonce = client_ctrl.recv_msg("test").await.unwrap();
     match nonce {
         ControlMessage::AuthChallenge(_) => {
-            send_msg(&mut client_ctrl, &ControlMessage::Disconnect)
+            client_ctrl
+                .send_msg(&ControlMessage::Disconnect)
                 .await
                 .unwrap();
         }
@@ -194,12 +194,10 @@ async fn test_pairing_invalid_confirm_length() {
     });
 
     // Send valid ClientHello and PairingRequest
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     let (state, client_msg) = Spake2::<Ed25519Group>::start_a(
         &Password::new(b"123456"),
@@ -207,24 +205,20 @@ async fn test_pairing_invalid_confirm_length() {
         &Identity::new(HOST_IDENTITY),
     );
 
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::PairingRequest(client_msg),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::PairingRequest(client_msg))
+        .await
+        .unwrap();
 
     // Wait for PairingResponse
-    let host_msg = recv_msg(&mut client_ctrl, "test").await.unwrap();
+    let host_msg = client_ctrl.recv_msg("test").await.unwrap();
     if let ControlMessage::PairingResponse(msg) = host_msg {
         let _key = state.finish(&msg).unwrap();
         // Send invalid confirm (wrong length)
-        send_msg(
-            &mut client_ctrl,
-            &ControlMessage::PairingConfirm(vec![1, 2, 3]),
-        )
-        .await
-        .unwrap();
+        client_ctrl
+            .send_msg(&ControlMessage::PairingConfirm(vec![1, 2, 3]))
+            .await
+            .unwrap();
     } else {
         panic!("Expected PairingResponse");
     }
@@ -242,15 +236,13 @@ async fn test_auth_invalid_response_length() {
         tokio::spawn(async move { host_auth_challenge(&mut server_ctrl, &mut trust_db).await });
 
     // Wait for challenge and send invalid response
-    let challenge = recv_msg(&mut client_ctrl, "test").await.unwrap();
+    let challenge = client_ctrl.recv_msg("test").await.unwrap();
     if let ControlMessage::AuthChallenge(_nonce) = challenge {
         // Send wrong length response
-        send_msg(
-            &mut client_ctrl,
-            &ControlMessage::AuthResponse(vec![1, 2, 3]),
-        )
-        .await
-        .unwrap();
+        client_ctrl
+            .send_msg(&ControlMessage::AuthResponse(vec![1, 2, 3]))
+            .await
+            .unwrap();
     } else {
         panic!("Expected AuthChallenge");
     }
@@ -267,10 +259,10 @@ async fn test_client_pairing_connection_closed_during_wait() {
     let client_task = tokio::spawn(async move { client_pairing(&mut client_ctrl, "123456").await });
 
     // Send ClientHello, receive, then close
-    let hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+    let hello = server_ctrl.recv_msg("test").await.unwrap();
     if let ControlMessage::ClientHello(ClientIntent::Pair) = hello {
         // Receive PairingRequest but don't respond
-        let _request = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _request = server_ctrl.recv_msg("test").await.unwrap();
         drop(server_ctrl);
     }
 
@@ -287,12 +279,10 @@ async fn test_client_auth_connection_closed_during_wait() {
     // Server sends challenge but then closes
     let server_task = tokio::spawn(async move {
         // Just send AuthChallenge and close
-        send_msg(
-            &mut server_ctrl,
-            &ControlMessage::AuthChallenge(vec![1; 32]),
-        )
-        .await
-        .unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::AuthChallenge(vec![1; 32]))
+            .await
+            .unwrap();
         drop(server_ctrl);
     });
 
@@ -310,10 +300,11 @@ async fn test_client_pairing_unexpected_response() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Wait for PairingRequest but send wrong response
-        let _request = recv_msg(&mut server_ctrl, "test").await.unwrap();
-        send_msg(&mut server_ctrl, &ControlMessage::Keepalive)
+        let _request = server_ctrl.recv_msg("test").await.unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
     });
@@ -331,9 +322,10 @@ async fn test_client_auth_unexpected_challenge_message() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Send wrong message instead of AuthChallenge
-        send_msg(&mut server_ctrl, &ControlMessage::Keepalive)
+        server_ctrl
+            .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
     });
@@ -351,18 +343,17 @@ async fn test_client_auth_unexpected_result_message() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Send AuthChallenge
-        send_msg(
-            &mut server_ctrl,
-            &ControlMessage::AuthChallenge(vec![0; 32]),
-        )
-        .await
-        .unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::AuthChallenge(vec![0; 32]))
+            .await
+            .unwrap();
         // Wait for AuthResponse
-        let _response = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _response = server_ctrl.recv_msg("test").await.unwrap();
         // Send wrong message instead of AuthResult
-        send_msg(&mut server_ctrl, &ControlMessage::Keepalive)
+        server_ctrl
+            .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
     });
@@ -378,8 +369,8 @@ async fn test_client_pairing_stream_closed_unexpectedly() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello and PairingRequest, then close stream
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
-        let _request = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
+        let _request = server_ctrl.recv_msg("test").await.unwrap();
         server_ctrl.sender.stream.finish().unwrap();
     });
 
@@ -394,14 +385,12 @@ async fn test_client_auth_stream_closed_unexpectedly() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello, send challenge, wait for response, then close
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
-        send_msg(
-            &mut server_ctrl,
-            &ControlMessage::AuthChallenge(vec![0; 32]),
-        )
-        .await
-        .unwrap();
-        let _response = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::AuthChallenge(vec![0; 32]))
+            .await
+            .unwrap();
+        let _response = server_ctrl.recv_msg("test").await.unwrap();
         server_ctrl.sender.stream.finish().unwrap();
     });
 
@@ -432,7 +421,7 @@ async fn test_auth_invalid_signature_rejected() {
         tokio::spawn(async move { host_auth_challenge(&mut server_ctrl2, &mut trust_db).await });
 
     // Wait for challenge
-    let challenge = recv_msg(&mut client_ctrl2, "test").await.unwrap();
+    let challenge = client_ctrl2.recv_msg("test").await.unwrap();
     let _nonce = match challenge {
         ControlMessage::AuthChallenge(n) => n,
         _ => panic!("Expected AuthChallenge"),
@@ -442,12 +431,13 @@ async fn test_auth_invalid_signature_rejected() {
     let mut payload = Vec::with_capacity(96);
     payload.extend_from_slice(key.verifying_key().as_bytes());
     payload.extend_from_slice(&[0u8; 64]); // invalid signature
-    send_msg(&mut client_ctrl2, &ControlMessage::AuthResponse(payload))
+    client_ctrl2
+        .send_msg(&ControlMessage::AuthResponse(payload))
         .await
         .unwrap();
 
     // Drain AuthResult to avoid broken pipe
-    let _ = recv_msg(&mut client_ctrl2, "drain").await;
+    let _ = client_ctrl2.recv_msg("drain").await;
 
     let result = server_task.await.unwrap();
     assert!(result.is_err());
@@ -467,7 +457,7 @@ async fn test_auth_invalid_curve_point_rejected() {
         tokio::spawn(async move { host_auth_challenge(&mut server_ctrl, &mut trust_db).await });
 
     // Wait for challenge
-    let challenge = recv_msg(&mut client_ctrl, "test").await.unwrap();
+    let challenge = client_ctrl.recv_msg("test").await.unwrap();
     assert!(matches!(challenge, ControlMessage::AuthChallenge(_)));
 
     // Send response with invalid curve point (y=2) as public key + dummy signature
@@ -476,7 +466,8 @@ async fn test_auth_invalid_curve_point_rejected() {
     let mut payload = Vec::with_capacity(96);
     payload.extend_from_slice(&bad_pubkey);
     payload.extend_from_slice(&[0u8; 64]);
-    send_msg(&mut client_ctrl, &ControlMessage::AuthResponse(payload))
+    client_ctrl
+        .send_msg(&ControlMessage::AuthResponse(payload))
         .await
         .unwrap();
 
@@ -501,12 +492,10 @@ async fn test_pairing_confirm_invalid_curve_point() {
         );
 
     // Send ClientHello + PairingRequest
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     let (state, client_msg) = Spake2::<Ed25519Group>::start_a(
         &Password::new(pin.as_bytes()),
@@ -514,26 +503,26 @@ async fn test_pairing_confirm_invalid_curve_point() {
         &Identity::new(HOST_IDENTITY),
     );
 
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::PairingRequest(client_msg),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::PairingRequest(client_msg))
+        .await
+        .unwrap();
 
     // Wait for PairingResponse
-    let host_msg = recv_msg(&mut client_ctrl, "test").await.unwrap();
+    let host_msg = client_ctrl.recv_msg("test").await.unwrap();
     if let ControlMessage::PairingResponse(msg) = host_msg {
         let key = state.finish(&msg).unwrap();
 
         // Send confirm with invalid curve point (y=2) but valid HMAC
         let mut bad_pubkey = [0u8; 32];
         bad_pubkey[0] = 2; // Not on Ed25519 curve
-        let hmac = simple_hmac(&key, &bad_pubkey);
+        let key_array: [u8; 32] = key.try_into().unwrap();
+        let hmac = hmac_bytes(&key_array, &bad_pubkey);
         let mut payload = Vec::with_capacity(64);
         payload.extend_from_slice(&bad_pubkey);
         payload.extend_from_slice(&hmac);
-        send_msg(&mut client_ctrl, &ControlMessage::PairingConfirm(payload))
+        client_ctrl
+            .send_msg(&ControlMessage::PairingConfirm(payload))
             .await
             .unwrap();
     } else {
@@ -561,12 +550,10 @@ async fn test_pairing_confirm_unexpected_message() {
         );
 
     // Send ClientHello + PairingRequest
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     let (_state, client_msg) = Spake2::<Ed25519Group>::start_a(
         &Password::new(pin.as_bytes()),
@@ -574,16 +561,15 @@ async fn test_pairing_confirm_unexpected_message() {
         &Identity::new(HOST_IDENTITY),
     );
 
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::PairingRequest(client_msg),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::PairingRequest(client_msg))
+        .await
+        .unwrap();
 
     // Wait for PairingResponse, then send wrong message instead of PairingConfirm
-    let _host_msg = recv_msg(&mut client_ctrl, "test").await.unwrap();
-    send_msg(&mut client_ctrl, &ControlMessage::Keepalive)
+    let _host_msg = client_ctrl.recv_msg("test").await.unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::Keepalive)
         .await
         .unwrap();
 
@@ -598,21 +584,23 @@ async fn test_client_pairing_result_unexpected_message() {
 
     let server_task = tokio::spawn(async move {
         // Consume ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Consume PairingRequest
-        let _request = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _request = server_ctrl.recv_msg("test").await.unwrap();
         // Send PairingResponse (dummy SPAKE2 message)
         let (_state, host_msg) = Spake2::<Ed25519Group>::start_b(
             &Password::new(pin.as_bytes()),
             &Identity::new(CLIENT_IDENTITY),
             &Identity::new(HOST_IDENTITY),
         );
-        send_msg(&mut server_ctrl, &ControlMessage::PairingResponse(host_msg))
+        server_ctrl
+            .send_msg(&ControlMessage::PairingResponse(host_msg))
             .await
             .unwrap();
         // Wait for PairingConfirm, then send wrong message instead of PairingResult
-        let _confirm = recv_msg(&mut server_ctrl, "test").await.unwrap();
-        send_msg(&mut server_ctrl, &ControlMessage::Keepalive)
+        let _confirm = server_ctrl.recv_msg("test").await.unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::Keepalive)
             .await
             .unwrap();
     });
@@ -629,18 +617,17 @@ async fn test_client_auth_rejected() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Send challenge
-        send_msg(
-            &mut server_ctrl,
-            &ControlMessage::AuthChallenge(vec![0; 32]),
-        )
-        .await
-        .unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::AuthChallenge(vec![0; 32]))
+            .await
+            .unwrap();
         // Wait for response
-        let _response = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _response = server_ctrl.recv_msg("test").await.unwrap();
         // Send rejection
-        send_msg(&mut server_ctrl, &ControlMessage::AuthResult(false))
+        server_ctrl
+            .send_msg(&ControlMessage::AuthResult(false))
             .await
             .unwrap();
         // Keep the connection alive until client reads the result
@@ -672,12 +659,10 @@ async fn test_host_pairing_spake2_finish_fails_with_wrong_identity() {
         );
 
     // Send valid ClientHello
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     // Start SPAKE2 with WRONG identities (swapped)
     let (_state, client_msg) = Spake2::<Ed25519Group>::start_a(
@@ -686,12 +671,10 @@ async fn test_host_pairing_spake2_finish_fails_with_wrong_identity() {
         &Identity::new(CLIENT_IDENTITY), // WRONG: should be HOST_IDENTITY
     );
 
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::PairingRequest(client_msg),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::PairingRequest(client_msg))
+        .await
+        .unwrap();
 
     let result = server_task.await.unwrap();
     assert!(result.is_err());
@@ -710,17 +693,15 @@ async fn test_client_pairing_spake2_finish_fails_with_garbage_message() {
 
     let server_task = tokio::spawn(async move {
         // Wait for ClientHello
-        let _hello = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _hello = server_ctrl.recv_msg("test").await.unwrap();
         // Wait for PairingRequest
-        let _request = recv_msg(&mut server_ctrl, "test").await.unwrap();
+        let _request = server_ctrl.recv_msg("test").await.unwrap();
         // Send garbage as PairingResponse instead of valid SPAKE2 message
         let garbage_msg = vec![1, 2, 3, 4, 5];
-        send_msg(
-            &mut server_ctrl,
-            &ControlMessage::PairingResponse(garbage_msg),
-        )
-        .await
-        .unwrap();
+        server_ctrl
+            .send_msg(&ControlMessage::PairingResponse(garbage_msg))
+            .await
+            .unwrap();
     });
 
     let result = client_pairing(&mut client_ctrl, pin).await;
@@ -746,21 +727,17 @@ async fn test_host_pairing_spake2_finish_fails_with_garbage_message() {
         );
 
     // Send valid ClientHello
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::ClientHello(ClientIntent::Pair),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::ClientHello(ClientIntent::Pair))
+        .await
+        .unwrap();
 
     // Send garbage as PairingRequest instead of valid SPAKE2 message
     let garbage_msg = vec![42; 33]; // Random 33 bytes to trigger failure
-    send_msg(
-        &mut client_ctrl,
-        &ControlMessage::PairingRequest(garbage_msg),
-    )
-    .await
-    .unwrap();
+    client_ctrl
+        .send_msg(&ControlMessage::PairingRequest(garbage_msg))
+        .await
+        .unwrap();
 
     let result = server_task.await.unwrap();
     assert!(result.is_err());
@@ -771,35 +748,54 @@ async fn test_host_pairing_spake2_finish_fails_with_garbage_message() {
     );
 }
 
-// ── simple_hmac ─────────────────────────────────────────────────────────
+// ── HMAC tests ──────────────────────────────────────────────────────────
 
 #[test]
-fn test_simple_hmac_deterministic() {
-    let key = b"test-key";
+fn test_hmac_bytes_deterministic() {
+    let key = [1u8; 32];
     let data = b"test-data";
-    let h1 = simple_hmac(key, data);
-    let h2 = simple_hmac(key, data);
+    let h1 = hmac_bytes(&key, data);
+    let h2 = hmac_bytes(&key, data);
     assert_eq!(h1, h2);
 }
 
 #[test]
-fn test_simple_hmac_different_keys_differ() {
+fn test_hmac_bytes_different_keys_differ() {
     let data = b"test-data";
-    let h1 = simple_hmac(b"key1", data);
-    let h2 = simple_hmac(b"key2", data);
+    let key1 = [1u8; 32];
+    let key2 = [2u8; 32];
+    let h1 = hmac_bytes(&key1, data);
+    let h2 = hmac_bytes(&key2, data);
     assert_ne!(h1, h2);
 }
 
 #[test]
-fn test_simple_hmac_different_data_differ() {
-    let key = b"test-key";
-    let h1 = simple_hmac(key, b"data1");
-    let h2 = simple_hmac(key, b"data2");
+fn test_hmac_bytes_different_data_differ() {
+    let key = [1u8; 32];
+    let h1 = hmac_bytes(&key, b"data1");
+    let h2 = hmac_bytes(&key, b"data2");
     assert_ne!(h1, h2);
 }
 
 #[test]
-fn test_simple_hmac_length() {
-    let h = simple_hmac(b"key", b"data");
+fn test_hmac_bytes_length() {
+    let key = [1u8; 32];
+    let h = hmac_bytes(&key, b"data");
     assert_eq!(h.len(), 32);
+}
+
+#[test]
+fn test_compute_hmac_constant_time_verification() {
+    let key = [1u8; 32];
+    let data = b"test-data";
+    let hmac = compute_hmac(&key, data);
+    let expected_bytes = hmac_bytes(&key, data);
+
+    // Correct verification should pass
+    assert!(hmac.verify_slice(&expected_bytes).is_ok());
+
+    // Wrong data should fail
+    let wrong_bytes = [0u8; 32];
+    let hmac2 = compute_hmac(&key, data);
+    assert!(hmac2.verify_slice(&wrong_bytes).is_err());
 }

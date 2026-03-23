@@ -140,6 +140,13 @@ impl QuicVideoTransport {
     /// Used during the SPAKE2 pairing flow where the PIN-based key agreement
     /// provides authentication independently of TLS certificate validation.
     ///
+    /// # Security
+    ///
+    /// This function **skips TLS certificate verification**. It must only be used
+    /// during the initial SPAKE2 PIN-based pairing flow, where the shared PIN
+    /// provides authentication independently of TLS. Using this for normal
+    /// connections would allow man-in-the-middle attacks.
+    ///
     /// # Errors
     ///
     /// Returns [`TransportError`] if TLS setup or the QUIC handshake fails.
