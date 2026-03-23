@@ -110,6 +110,12 @@ mod macos {
         // SAFETY: caller guarantees source_frame_ref_con is a valid &mut FrameSlot.
         let slot = unsafe { &mut *(source_frame_ref_con.cast::<FrameSlot>()) };
         slot.status = status;
+        // Retain the pixel buffer so it survives beyond this callback.
+        // VideoToolbox may release its internal reference after the callback
+        // returns, leaving a dangling pointer in the slot.
+        if !image_buffer.is_null() {
+            unsafe { CFRetain(image_buffer.cast_const()) };
+        }
         slot.image_buffer = image_buffer;
     }
 
@@ -194,6 +200,10 @@ mod macos {
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRelease(cf: *const c_void);
+        /// Pseudo-allocator that performs no allocation or deallocation.
+        /// Pass to `CMBlockBufferCreateWithMemoryBlock` to prevent it from
+        /// freeing caller-owned memory.
+        static kCFAllocatorNull: *const c_void;
     }
 
     #[link(name = "CoreVideo", kind = "framework")]
@@ -445,12 +455,14 @@ mod macos {
             let data_len = length_prefixed.len();
             let mut block_buf: *mut c_void = std::ptr::null_mut();
             // SAFETY: length_prefixed is valid for the duration of the CMBlockBuffer lifetime.
+            // Pass `kCFAllocatorNull` as the block allocator so CoreMedia does NOT
+            // free our Rust-owned buffer when the CMBlockBuffer is released.
             let status = unsafe {
                 CMBlockBufferCreateWithMemoryBlock(
                     std::ptr::null(),
                     length_prefixed.as_mut_ptr().cast(),
                     data_len,
-                    std::ptr::null(),
+                    kCFAllocatorNull,
                     std::ptr::null(),
                     0,
                     data_len,
@@ -522,6 +534,10 @@ mod macos {
             unsafe { VTDecompressionSessionWaitForAsynchronousFrames(self.session) };
 
             if slot.status != 0 {
+                // Release the pixel buffer if it was retained in the callback.
+                if !slot.image_buffer.is_null() {
+                    unsafe { CFRelease(slot.image_buffer.cast_const()) };
+                }
                 return Err(VideoError::DecodingFailed {
                     reason: format!("decode callback reported error: {}", slot.status),
                 });
@@ -530,7 +546,11 @@ mod macos {
                 return Ok(None);
             }
 
-            let frame = Self::pixel_buffer_to_frame(slot.image_buffer, packet.timestamp_us)?;
+            let frame = Self::pixel_buffer_to_frame(slot.image_buffer, packet.timestamp_us);
+            // SAFETY: image_buffer was retained in decode_callback; release our
+            // reference now that we've extracted the IOSurface.
+            unsafe { CFRelease(slot.image_buffer.cast_const()) };
+            let frame = frame?;
             Ok(Some(frame))
         }
 
