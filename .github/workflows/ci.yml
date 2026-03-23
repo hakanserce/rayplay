@@ -49,6 +49,12 @@ jobs:
       - name: Install cargo-make
         uses: taiki-e/install-action@cargo-make
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Run CI pipeline
         run: cargo make ci
 

@@ -64,7 +64,7 @@ impl FfmpegEncoder {
             reason: format!("FFmpeg encoder not found for {codec_id:?}"),
         })?;
 
-        let mut ctx = codec
+        let mut ctx = codec::context::Context::new()
             .encoder()
             .video()
             .map_err(|e| VideoError::EncodingFailed {
@@ -92,7 +92,7 @@ impl FfmpegEncoder {
         }
 
         let encoder = ctx
-            .open_with(opts)
+            .open_as_with(codec, opts)
             .map_err(|e| VideoError::EncodingFailed {
                 reason: format!("FFmpeg encoder open failed: {e}"),
             })?;

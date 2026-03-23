@@ -3,20 +3,20 @@
 //! Submodules implement CLI configuration, QUIC connection setup, and the
 //! receive-decode loop.  [`client_main`](super) wires them together.
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 mod config;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 mod connect;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 mod decode_dispatch;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 mod receive;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 pub(crate) mod test_helper;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests;
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub use config::{ClientArgs, ClientConfig};
 #[cfg(target_os = "macos")]
 pub use connect::connect;

@@ -60,9 +60,10 @@ impl FfmpegDecoder {
                 reason: format!("FFmpeg decoder not found for {codec_id:?}"),
             })?;
 
-        let decoder = ff_codec
+        let decoder = codec::context::Context::new()
             .decoder()
-            .video()
+            .open_as(ff_codec)
+            .and_then(|o| o.video())
             .map_err(|e| VideoError::DecodingFailed {
                 reason: format!("FFmpeg decoder context creation failed: {e}"),
             })?;
