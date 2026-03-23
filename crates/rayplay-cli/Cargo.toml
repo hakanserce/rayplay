@@ -23,6 +23,11 @@ rayplay-core                 = { path = "../rayplay-core" }
 rayplay-network              = { path = "../rayplay-network" }
 rayplay-video                = { path = "../rayplay-video" }
 
+[features]
+## Forward hw-codec-tests to rayplay-video for integration tests that need
+## hardware encoders/decoders (VtDecoder on macOS, NvencEncoder on Windows).
+hw-codec-tests = ["rayplay-video/hw-codec-tests"]
+
 [[bench]]
 name    = "e2e_latency"
 harness = false
@@ -30,3 +35,6 @@ harness = false
 [dev-dependencies]
 criterion.workspace = true
 tempfile            = "3"
+anyhow.workspace    = true
+wgpu.workspace      = true
+pollster.workspace  = true

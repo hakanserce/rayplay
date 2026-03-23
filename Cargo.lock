@@ -2217,6 +2217,7 @@ dependencies = [
  "clap",
  "criterion",
  "crossbeam-channel",
+ "pollster",
  "rayplay-core",
  "rayplay-network",
  "rayplay-video",
@@ -2225,6 +2226,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]
