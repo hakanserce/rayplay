@@ -1,8 +1,10 @@
-/// Raw FFI bindings for NVENC SDK (Windows only).
+/// Raw FFI bindings for NVENC SDK 12.2 (Windows only).
 ///
-/// These types are manually defined to match the NVENC SDK without requiring
-/// bindgen or build-time dependencies. NVENC is loaded dynamically from
-/// `nvEncodeAPI64.dll` at runtime.
+/// These types are manually defined to match the NVENC Video Codec SDK 12.2
+/// `nvEncodeAPI.h` header without requiring bindgen or build-time dependencies.
+/// NVENC is loaded dynamically from `nvEncodeAPI64.dll` at runtime.
+///
+/// Reference: <https://github.com/FFmpeg/nv-codec-headers/blob/n12.2.72.0/include/ffnvcodec/nvEncodeAPI.h>
 #[cfg(any(target_os = "windows", test))]
 #[allow(
     non_camel_case_types,
@@ -21,17 +23,25 @@
 pub(crate) mod ffi {
     use std::ffi::c_void;
 
-    // NVENC API version information
+    // ── NVENC API version ──
+
     pub const NVENCAPI_MAJOR_VERSION: u32 = 12;
     pub const NVENCAPI_MINOR_VERSION: u32 = 2;
-    pub const NVENCAPI_VERSION: u32 = (NVENCAPI_MAJOR_VERSION << 4) | NVENCAPI_MINOR_VERSION;
+    pub const NVENCAPI_VERSION: u32 = NVENCAPI_MAJOR_VERSION | (NVENCAPI_MINOR_VERSION << 24);
 
-    // Version macro for structs
-    pub const fn struct_ver<T>(ver: u32) -> u32 {
-        std::mem::size_of::<T>() as u32 | (ver << 16) | (NVENCAPI_VERSION << 28)
+    /// Constructs the version field for an NVENC struct.
+    /// Matches the SDK macro: `NVENCAPI_STRUCT_VERSION(ver)`.
+    pub const fn nvencapi_struct_version(ver: u32) -> u32 {
+        NVENCAPI_VERSION | (ver << 16) | (0x7 << 28)
     }
 
-    // GUID type compatible with Windows GUID
+    /// Version with high bit set — used by some structs in SDK 12.2.
+    pub const fn nvencapi_struct_version_high(ver: u32) -> u32 {
+        nvencapi_struct_version(ver) | (1 << 31)
+    }
+
+    // ── GUID ──
+
     #[repr(C)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct GUID {
@@ -41,7 +51,8 @@ pub(crate) mod ffi {
         pub data4: [u8; 8],
     }
 
-    // NVENC codec GUIDs
+    // ── Codec GUIDs ──
+
     pub const NV_ENC_CODEC_H264_GUID: GUID = GUID {
         data1: 0x6bc82762,
         data2: 0x4e63,
@@ -56,7 +67,8 @@ pub(crate) mod ffi {
         data4: [0x9c, 0x13, 0x09, 0x84, 0xbd, 0x71, 0x6c, 0x8d],
     };
 
-    // NVENC preset GUIDs (P1 = lowest latency)
+    // ── Preset GUIDs ──
+
     pub const NV_ENC_PRESET_P1_GUID: GUID = GUID {
         data1: 0xfc0a8d3e,
         data2: 0x45f8,
@@ -64,7 +76,8 @@ pub(crate) mod ffi {
         data4: [0x80, 0xc7, 0x29, 0x8e, 0x5e, 0x24, 0x01, 0x4c],
     };
 
-    // NVENC profile GUIDs
+    // ── Profile GUIDs ──
+
     pub const NV_ENC_H264_PROFILE_MAIN_GUID: GUID = GUID {
         data1: 0x60b5c1d4,
         data2: 0x67fe,
@@ -79,7 +92,8 @@ pub(crate) mod ffi {
         data4: [0x87, 0x8f, 0xf1, 0x25, 0x3b, 0x4d, 0xfd, 0x3d],
     };
 
-    // Status codes
+    // ── Status codes ──
+
     pub type NVENCSTATUS = u32;
     pub const NV_ENC_SUCCESS: NVENCSTATUS = 0;
     pub const NV_ENC_ERR_NO_ENCODE_DEVICE: NVENCSTATUS = 1;
@@ -94,7 +108,8 @@ pub(crate) mod ffi {
     pub const NV_ENC_ERR_RESOURCE_NOT_REGISTERED: NVENCSTATUS = 10;
     pub const NV_ENC_ERR_RESOURCE_NOT_MAPPED: NVENCSTATUS = 11;
 
-    // Enums
+    // ── Enums (all u32) ──
+
     #[repr(u32)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NV_ENC_INPUT_RESOURCE_TYPE {
@@ -107,17 +122,17 @@ pub(crate) mod ffi {
     #[repr(u32)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NV_ENC_BUFFER_FORMAT {
-        NV_ENC_BUFFER_FORMAT_UNDEFINED = 0x0000_0000,
-        NV_ENC_BUFFER_FORMAT_NV12 = 0x0000_0001,
-        NV_ENC_BUFFER_FORMAT_YV12 = 0x0000_0010,
-        NV_ENC_BUFFER_FORMAT_IYUV = 0x0000_0100,
-        NV_ENC_BUFFER_FORMAT_YUV444 = 0x0000_1000,
-        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 0x0100_0000,
-        NV_ENC_BUFFER_FORMAT_ARGB = 0x0200_0000,
-        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x0400_0000,
-        NV_ENC_BUFFER_FORMAT_AYUV = 0x0800_0000,
-        NV_ENC_BUFFER_FORMAT_ABGR = 0x1000_0000,
-        NV_ENC_BUFFER_FORMAT_ABGR10 = 0x2000_0000,
+        NV_ENC_BUFFER_FORMAT_UNDEFINED = 0x00000000,
+        NV_ENC_BUFFER_FORMAT_NV12 = 0x00000001,
+        NV_ENC_BUFFER_FORMAT_YV12 = 0x00000010,
+        NV_ENC_BUFFER_FORMAT_IYUV = 0x00000100,
+        NV_ENC_BUFFER_FORMAT_YUV444 = 0x00001000,
+        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 0x01000000,
+        NV_ENC_BUFFER_FORMAT_ARGB = 0x02000000,
+        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x04000000,
+        NV_ENC_BUFFER_FORMAT_AYUV = 0x08000000,
+        NV_ENC_BUFFER_FORMAT_ABGR = 0x10000000,
+        NV_ENC_BUFFER_FORMAT_ABGR10 = 0x20000000,
     }
 
     #[repr(u32)]
@@ -155,8 +170,8 @@ pub(crate) mod ffi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NV_ENC_MULTI_PASS {
         NV_ENC_MULTI_PASS_DISABLED = 0,
-        NV_ENC_MULTI_PASS_QUARTER_RESOLUTION = 1,
-        NV_ENC_MULTI_PASS_FULL_RESOLUTION = 2,
+        NV_ENC_TWO_PASS_QUARTER_RESOLUTION = 1,
+        NV_ENC_TWO_PASS_FULL_RESOLUTION = 2,
     }
 
     // Picture flags
@@ -170,32 +185,272 @@ pub(crate) mod ffi {
     pub const NV_ENC_PARAMS_RC_VBR: u32 = 0x1;
     pub const NV_ENC_PARAMS_RC_CBR: u32 = 0x2;
 
-    // Structs (with version fields set to appropriate values)
+    // ── RC bitfield flags (NV_ENC_RC_PARAMS.rc_flags) ──
+
+    pub const RC_FLAG_ENABLE_MIN_QP: u32 = 1 << 0;
+    pub const RC_FLAG_ENABLE_MAX_QP: u32 = 1 << 1;
+    pub const RC_FLAG_ENABLE_INITIAL_RCQP: u32 = 1 << 2;
+    pub const RC_FLAG_ENABLE_AQ: u32 = 1 << 3;
+    pub const RC_FLAG_ENABLE_LOOKAHEAD: u32 = 1 << 5;
+    pub const RC_FLAG_DISABLE_IADAPT: u32 = 1 << 6;
+    pub const RC_FLAG_DISABLE_BADAPT: u32 = 1 << 7;
+    pub const RC_FLAG_ENABLE_TEMPORAL_AQ: u32 = 1 << 8;
+    pub const RC_FLAG_ZERO_REORDER_DELAY: u32 = 1 << 9;
+    pub const RC_FLAG_ENABLE_NONREF_P: u32 = 1 << 10;
+    pub const RC_FLAG_STRICT_GOP_TARGET: u32 = 1 << 11;
+
+    // ── H264 config bitfield flags (NV_ENC_CONFIG_H264.h264_flags) ──
+
+    pub const H264_FLAG_REPEAT_SPS_PPS: u32 = 1 << 12;
+
+    // ── HEVC config bitfield flags (NV_ENC_CONFIG_HEVC.hevc_flags) ──
+
+    pub const HEVC_FLAG_REPEAT_SPS_PPS: u32 = 1 << 7;
+    pub const HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT: u32 = 9;
+
+    // ── Structs ──
+
     #[repr(C)]
-    pub struct NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
-        pub version: u32,
-        pub deviceType: NV_ENC_DEVICE_TYPE,
-        pub device: *mut c_void,
-        pub reserved: *mut c_void,
-        pub apiVersion: u32,
-        pub reserved1: [*mut c_void; 56],
-        pub reserved2: [u32; 64],
+    pub struct NV_ENC_QP {
+        pub qpInterP: u32,
+        pub qpInterB: u32,
+        pub qpIntra: u32,
     }
 
-    impl Default for NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
+    // SDK 12.2: 128 bytes
+    #[repr(C)]
+    pub struct NV_ENC_RC_PARAMS {
+        pub version: u32,
+        pub rateControlMode: u32, // NV_ENC_PARAMS_RC_MODE
+        pub constQP: NV_ENC_QP,
+        pub averageBitRate: u32,
+        pub maxBitRate: u32,
+        pub vbvBufferSize: u32,
+        pub vbvInitialDelay: u32,
+        pub rc_flags: u32, // packed bitfield
+        pub minQP: NV_ENC_QP,
+        pub maxQP: NV_ENC_QP,
+        pub initialRCQP: NV_ENC_QP,
+        pub temporallayerIdxMask: u32,
+        pub temporalLayerQP: [u8; 8],
+        pub targetQuality: u8,
+        pub targetQualityLSB: u8,
+        pub lookaheadDepth: u16,
+        pub lowDelayKeyFrameScale: u8,
+        pub yDcQPIndexOffset: i8,
+        pub uDcQPIndexOffset: i8,
+        pub vDcQPIndexOffset: i8,
+        pub qpMapMode: u32, // NV_ENC_QP_MAP_MODE
+        pub multiPass: u32, // NV_ENC_MULTI_PASS
+        pub alphaLayerBitrateRatio: u32,
+        pub cbQPIndexOffset: i8,
+        pub crQPIndexOffset: i8,
+        pub _reserved2: u16,
+        pub lookaheadLevel: u32, // NV_ENC_LOOKAHEAD_LEVEL
+        pub reserved: [u32; 3],
+    }
+
+    impl Default for NV_ENC_RC_PARAMS {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(1),
-                deviceType: NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
-                device: std::ptr::null_mut(),
-                reserved: std::ptr::null_mut(),
-                apiVersion: NVENCAPI_VERSION,
-                reserved1: [std::ptr::null_mut(); 56],
-                reserved2: [0; 64],
-            }
+            // SAFETY: All fields are integers — zero is valid.
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(1);
+            s.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+            s
         }
     }
 
+    // SDK 12.2: NV_ENC_CONFIG_H264_VUI_PARAMETERS = 112 bytes (16 u32 fields + reserved[12])
+    // We don't actively use VUI params, so represent as opaque bytes.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_CONFIG_H264_VUI_PARAMETERS {
+        pub _data: [u32; 28], // 112 bytes
+    }
+
+    impl Default for NV_ENC_CONFIG_H264_VUI_PARAMETERS {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    pub type NV_ENC_CONFIG_HEVC_VUI_PARAMETERS = NV_ENC_CONFIG_H264_VUI_PARAMETERS;
+
+    // SDK 12.2: NV_ENC_TIME_CODE = 32 bytes
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_TIME_CODE {
+        pub _data: [u32; 8], // 32 bytes
+    }
+
+    impl Default for NV_ENC_TIME_CODE {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: NV_ENC_PIC_PARAMS_H264_EXT = 128 bytes (union with reserved[32])
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_PIC_PARAMS_H264_EXT {
+        pub _reserved: [u32; 32],
+    }
+
+    impl Default for NV_ENC_PIC_PARAMS_H264_EXT {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE = 16 bytes
+    #[repr(C)]
+    pub struct NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE {
+        pub _bitfield: u32,
+        pub reserved1: [u32; 3],
+    }
+
+    impl Default for NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: 1792 bytes
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_CONFIG_H264 {
+        pub h264_flags: u32, // 22 packed bitfields
+        pub level: u32,
+        pub idrPeriod: u32,
+        pub separateColourPlaneFlag: u32,
+        pub disableDeblockingFilterIDC: u32,
+        pub numTemporalLayers: u32,
+        pub spsId: u32,
+        pub ppsId: u32,
+        pub adaptiveTransformMode: u32, // enum
+        pub fmoMode: u32,               // enum
+        pub bdirectMode: u32,           // enum
+        pub entropyCodingMode: u32,     // enum
+        pub stereoMode: u32,            // enum
+        pub intraRefreshPeriod: u32,
+        pub intraRefreshCnt: u32,
+        pub maxNumRefFrames: u32,
+        pub sliceMode: u32,
+        pub sliceModeData: u32,
+        pub h264VUIParameters: NV_ENC_CONFIG_H264_VUI_PARAMETERS, // 112 bytes
+        pub ltrNumFrames: u32,
+        pub ltrTrustMode: u32,
+        pub chromaFormatIDC: u32,
+        pub maxTemporalLayers: u32,
+        pub useBFramesAsRef: u32, // enum
+        pub numRefL0: u32,        // enum
+        pub numRefL1: u32,        // enum
+        pub outputBitDepth: u32,  // enum NV_ENC_BIT_DEPTH
+        pub inputBitDepth: u32,   // enum NV_ENC_BIT_DEPTH
+        pub reserved1: [u32; 265],
+        pub reserved2: [*mut c_void; 64],
+    }
+
+    impl Default for NV_ENC_CONFIG_H264 {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: 1560 bytes
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_CONFIG_HEVC {
+        pub level: u32,
+        pub tier: u32,
+        pub minCUSize: u32,  // enum NV_ENC_HEVC_CUSIZE
+        pub maxCUSize: u32,  // enum NV_ENC_HEVC_CUSIZE
+        pub hevc_flags: u32, // packed bitfields (32 bits)
+        pub idrPeriod: u32,
+        pub intraRefreshPeriod: u32,
+        pub intraRefreshCnt: u32,
+        pub maxNumRefFramesInDPB: u32,
+        pub ltrNumFrames: u32,
+        pub vpsId: u32,
+        pub spsId: u32,
+        pub ppsId: u32,
+        pub sliceMode: u32,
+        pub sliceModeData: u32,
+        pub maxTemporalLayersMinus1: u32,
+        pub hevcVUIParameters: NV_ENC_CONFIG_HEVC_VUI_PARAMETERS, // 112 bytes
+        pub ltrTrustMode: u32,
+        pub useBFramesAsRef: u32, // enum
+        pub numRefL0: u32,        // enum
+        pub numRefL1: u32,        // enum
+        pub tfLevel: u32,         // enum NV_ENC_TEMPORAL_FILTER_LEVEL
+        pub disableDeblockingFilterIDC: u32,
+        pub outputBitDepth: u32, // enum NV_ENC_BIT_DEPTH
+        pub inputBitDepth: u32,  // enum NV_ENC_BIT_DEPTH
+        pub reserved1: [u32; 210],
+        pub reserved2: [*mut c_void; 64],
+    }
+
+    impl Default for NV_ENC_CONFIG_HEVC {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: 1792 bytes (union, size = largest member or reserved[320])
+    #[repr(C)]
+    pub union NV_ENC_CODEC_CONFIG {
+        pub h264Config: NV_ENC_CONFIG_H264,
+        pub hevcConfig: NV_ENC_CONFIG_HEVC,
+        pub reserved: [u32; 448], // 1792 bytes to match union size
+    }
+
+    // SDK 12.2: 3584 bytes, version = NVENCAPI_STRUCT_VERSION(9) | (1<<31)
+    #[repr(C)]
+    pub struct NV_ENC_CONFIG {
+        pub version: u32,
+        pub profileGUID: GUID,
+        pub gopLength: u32,
+        pub frameIntervalP: i32,
+        pub monoChromeEncoding: u32,
+        pub frameFieldMode: u32,                    // enum
+        pub mvPrecision: u32,                       // enum
+        pub rcParams: NV_ENC_RC_PARAMS,             // 128 bytes
+        pub encodeCodecConfig: NV_ENC_CODEC_CONFIG, // 1792 bytes
+        pub reserved: [u32; 278],
+        pub reserved2: [*mut c_void; 64],
+    }
+
+    impl Default for NV_ENC_CONFIG {
+        fn default() -> Self {
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version_high(9);
+            s.gopLength = 60;
+            s.frameIntervalP = 1;
+            s.rcParams = NV_ENC_RC_PARAMS::default();
+            s
+        }
+    }
+
+    // SDK 12.2: 5128 bytes, version = NVENCAPI_STRUCT_VERSION(5) | (1<<31)
+    #[repr(C)]
+    pub struct NV_ENC_PRESET_CONFIG {
+        pub version: u32,
+        pub _reserved_pad: u32,       // SDK has `uint32_t reserved`
+        pub presetCfg: NV_ENC_CONFIG, // 3584 bytes
+        pub reserved1: [u32; 256],
+        pub reserved2: [*mut c_void; 64],
+    }
+
+    impl Default for NV_ENC_PRESET_CONFIG {
+        fn default() -> Self {
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version_high(5);
+            s.presetCfg = NV_ENC_CONFIG::default();
+            s
+        }
+    }
+
+    // SDK 12.2: 1800 bytes, version = NVENCAPI_STRUCT_VERSION(7) | (1<<31)
     #[repr(C)]
     pub struct NV_ENC_INITIALIZE_PARAMS {
         pub version: u32,
@@ -209,302 +464,56 @@ pub(crate) mod ffi {
         pub frameRateDen: u32,
         pub enableEncodeAsync: u32,
         pub enablePTD: u32,
-        pub reportSliceOffsets: u32,
-        pub enableSubFrameWrite: u32,
-        pub enableExternalMEHints: u32,
-        pub enableMEOnlyMode: u32,
-        pub enableWeightedPrediction: u32,
-        pub enableOutputInVidmem: u32,
-        pub reservedBitFields: u32,
+        pub init_flags: u32, // packed bitfield (reportSliceOffsets etc.)
         pub privDataSize: u32,
+        pub _reserved_pad: u32, // SDK: `uint32_t reserved`
         pub privData: *mut c_void,
         pub encodeConfig: *mut NV_ENC_CONFIG,
         pub maxEncodeWidth: u32,
         pub maxEncodeHeight: u32,
-        pub reserved1: [u32; 27],
+        pub maxMEHintCountsPerBlock: [NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE; 2], // 32 bytes
+        pub tuningInfo: NV_ENC_TUNING_INFO,
+        pub bufferFormat: u32, // NV_ENC_BUFFER_FORMAT for D3D12
+        pub numStateBuffers: u32,
+        pub outputStatsLevel: u32, // NV_ENC_OUTPUT_STATS_LEVEL
+        pub reserved1: [u32; 284],
         pub reserved2: [*mut c_void; 64],
     }
 
     impl Default for NV_ENC_INITIALIZE_PARAMS {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(5),
-                encodeGUID: GUID {
-                    data1: 0,
-                    data2: 0,
-                    data3: 0,
-                    data4: [0; 8],
-                },
-                presetGUID: GUID {
-                    data1: 0,
-                    data2: 0,
-                    data3: 0,
-                    data4: [0; 8],
-                },
-                encodeWidth: 0,
-                encodeHeight: 0,
-                darWidth: 0,
-                darHeight: 0,
-                frameRateNum: 0,
-                frameRateDen: 1,
-                enableEncodeAsync: 0,
-                enablePTD: 1,
-                reportSliceOffsets: 0,
-                enableSubFrameWrite: 0,
-                enableExternalMEHints: 0,
-                enableMEOnlyMode: 0,
-                enableWeightedPrediction: 0,
-                enableOutputInVidmem: 0,
-                reservedBitFields: 0,
-                privDataSize: 0,
-                privData: std::ptr::null_mut(),
-                encodeConfig: std::ptr::null_mut(),
-                maxEncodeWidth: 0,
-                maxEncodeHeight: 0,
-                reserved1: [0; 27],
-                reserved2: [std::ptr::null_mut(); 64],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version_high(7);
+            s.frameRateDen = 1;
+            s.enablePTD = 1;
+            s.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_UNDEFINED;
+            s
         }
     }
 
+    // SDK 12.2: 1552 bytes, version = NVENCAPI_STRUCT_VERSION(1)
     #[repr(C)]
-    pub struct NV_ENC_RC_PARAMS {
+    pub struct NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
         pub version: u32,
-        pub rateControlMode: u32,
-        pub constQP: NV_ENC_QP,
-        pub averageBitRate: u32,
-        pub maxBitRate: u32,
-        pub vbvBufferSize: u32,
-        pub vbvInitialDelay: u32,
-        pub enableMinQP: u32,
-        pub enableMaxQP: u32,
-        pub enableInitialRCQP: u32,
-        pub enableAQ: u32,
-        pub enableLookahead: u32,
-        pub disableIadapt: u32,
-        pub disableBadapt: u32,
-        pub enableTemporalAQ: u32,
-        pub zeroReorderDelay: u32,
-        pub enableNonRefP: u32,
-        pub strictGOPTarget: u32,
-        pub aqStrength: u32,
-        pub minQPP: u32,
-        pub minQPB: u32,
-        pub minQPI: u32,
-        pub maxQPP: u32,
-        pub maxQPB: u32,
-        pub maxQPI: u32,
-        pub initialRCQPP: u32,
-        pub initialRCQPB: u32,
-        pub initialRCQPI: u32,
-        pub temporalLayerIdxMask: u32,
-        pub baseLayerBitRate: u32,
-        pub temporalLayerBitRate: [u32; 8],
-        pub targetQuality: u32,
-        pub targetQualityLSB: u32,
-        pub lookaheadDepth: u32,
-        pub lowDelayKeyFrameScale: u32,
-        pub targetFrameSizeMapDeltaQPMax: u32,
-        pub targetFrameSizeMapDeltaQPMin: u32,
-        pub reserved: [u32; 10],
-    }
-
-    #[repr(C)]
-    pub struct NV_ENC_QP {
-        pub qpInterP: u32,
-        pub qpInterB: u32,
-        pub qpIntra: u32,
-    }
-
-    #[repr(C)]
-    pub struct NV_ENC_CONFIG {
-        pub version: u32,
-        pub profileGUID: GUID,
-        pub gopLength: u32,
-        pub frameIntervalP: u32,
-        pub monoChromeEncoding: u32,
-        pub frameFieldMode: u32,
-        pub mvPrecision: u32,
-        pub rcParams: NV_ENC_RC_PARAMS,
-        pub encodeCodecConfig: NV_ENC_CODEC_CONFIG,
-        pub reserved: [u32; 278],
+        pub deviceType: NV_ENC_DEVICE_TYPE,
+        pub device: *mut c_void,
+        pub reserved: *mut c_void,
+        pub apiVersion: u32,
+        pub reserved1: [u32; 253],
         pub reserved2: [*mut c_void; 64],
     }
 
-    #[repr(C)]
-    pub union NV_ENC_CODEC_CONFIG {
-        pub h264Config: NV_ENC_CONFIG_H264,
-        pub hevcConfig: NV_ENC_CONFIG_HEVC,
-        pub reserved: [u32; 320],
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct NV_ENC_CONFIG_H264 {
-        pub enableTemporalSVC: u32,
-        pub enableStereoMVC: u32,
-        pub hierarchicalPFrames: u32,
-        pub hierarchicalBFrames: u32,
-        pub outputBufferingPeriodSEI: u32,
-        pub outputPictureTimingSEI: u32,
-        pub outputAUD: u32,
-        pub disableSPSPPS: u32,
-        pub outputFramePackingSEI: u32,
-        pub outputRecoveryPointSEI: u32,
-        pub enableIntraRefresh: u32,
-        pub enableConstrainedEncoding: u32,
-        pub repeatSPSPPS: u32,
-        pub enableVFR: u32,
-        pub enableLTR: u32,
-        pub qpPrimeYZeroTransformBypassFlag: u32,
-        pub useConstrainedIntraPred: u32,
-        pub reserved1: [u32; 15],
-        pub reserved2: [*mut c_void; 64],
-    }
-
-    impl Default for NV_ENC_CONFIG_H264 {
+    impl Default for NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
         fn default() -> Self {
-            // SAFETY: All fields are primitive types and raw pointers — zero is valid.
-            unsafe { std::mem::zeroed() }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(1);
+            s.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
+            s.apiVersion = NVENCAPI_VERSION;
+            s
         }
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct NV_ENC_CONFIG_HEVC {
-        pub level: u32,
-        pub tier: u32,
-        pub minCUSize: u32,
-        pub maxCUSize: u32,
-        pub useConstrainedIntraPred: u32,
-        pub disableDeblockAcrossSliceBoundary: u32,
-        pub outputBufferingPeriodSEI: u32,
-        pub outputPictureTimingSEI: u32,
-        pub outputAUD: u32,
-        pub enableLTR: u32,
-        pub disableSPSPPS: u32,
-        pub repeatSPSPPS: u32,
-        pub enableIntraRefresh: u32,
-        pub chromaFormatIDC: u32,
-        pub pixelBitDepthMinus8: u32,
-        pub enableFillerDataInsertion: u32,
-        pub enableConstrainedEncoding: u32,
-        pub reserved: [u32; 15],
-        pub reserved1: [*mut c_void; 64],
-    }
-
-    impl Default for NV_ENC_CONFIG_HEVC {
-        fn default() -> Self {
-            // SAFETY: All fields are primitive types and raw pointers — zero is valid.
-            unsafe { std::mem::zeroed() }
-        }
-    }
-
-    impl Default for NV_ENC_CONFIG {
-        fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(7),
-                profileGUID: GUID {
-                    data1: 0,
-                    data2: 0,
-                    data3: 0,
-                    data4: [0; 8],
-                },
-                gopLength: 60,
-                frameIntervalP: 1,
-                monoChromeEncoding: 0,
-                frameFieldMode: 0,
-                mvPrecision: 0,
-                rcParams: NV_ENC_RC_PARAMS {
-                    version: struct_ver::<NV_ENC_RC_PARAMS>(1),
-                    rateControlMode: NV_ENC_PARAMS_RC_VBR,
-                    constQP: NV_ENC_QP {
-                        qpInterP: 25,
-                        qpInterB: 27,
-                        qpIntra: 23,
-                    },
-                    averageBitRate: 0,
-                    maxBitRate: 0,
-                    vbvBufferSize: 0,
-                    vbvInitialDelay: 0,
-                    enableMinQP: 0,
-                    enableMaxQP: 0,
-                    enableInitialRCQP: 0,
-                    enableAQ: 1,
-                    enableLookahead: 0,
-                    disableIadapt: 0,
-                    disableBadapt: 0,
-                    enableTemporalAQ: 0,
-                    zeroReorderDelay: 1,
-                    enableNonRefP: 0,
-                    strictGOPTarget: 0,
-                    aqStrength: 0,
-                    minQPP: 0,
-                    minQPB: 0,
-                    minQPI: 0,
-                    maxQPP: 51,
-                    maxQPB: 51,
-                    maxQPI: 51,
-                    initialRCQPP: 25,
-                    initialRCQPB: 27,
-                    initialRCQPI: 23,
-                    temporalLayerIdxMask: 0,
-                    baseLayerBitRate: 0,
-                    temporalLayerBitRate: [0; 8],
-                    targetQuality: 0,
-                    targetQualityLSB: 0,
-                    lookaheadDepth: 0,
-                    lowDelayKeyFrameScale: 1,
-                    targetFrameSizeMapDeltaQPMax: 0,
-                    targetFrameSizeMapDeltaQPMin: 0,
-                    reserved: [0; 10],
-                },
-                encodeCodecConfig: NV_ENC_CODEC_CONFIG {
-                    hevcConfig: NV_ENC_CONFIG_HEVC {
-                        level: 0,
-                        tier: 0,
-                        minCUSize: 0,
-                        maxCUSize: 0,
-                        useConstrainedIntraPred: 0,
-                        disableDeblockAcrossSliceBoundary: 0,
-                        outputBufferingPeriodSEI: 0,
-                        outputPictureTimingSEI: 0,
-                        outputAUD: 0,
-                        enableLTR: 0,
-                        disableSPSPPS: 0,
-                        repeatSPSPPS: 1,
-                        enableIntraRefresh: 0,
-                        chromaFormatIDC: 1,
-                        pixelBitDepthMinus8: 0,
-                        enableFillerDataInsertion: 0,
-                        enableConstrainedEncoding: 0,
-                        reserved: [0; 15],
-                        reserved1: [std::ptr::null_mut(); 64],
-                    },
-                },
-                reserved: [0; 278],
-                reserved2: [std::ptr::null_mut(); 64],
-            }
-        }
-    }
-
-    #[repr(C)]
-    pub struct NV_ENC_PRESET_CONFIG {
-        pub version: u32,
-        pub presetCfg: NV_ENC_CONFIG,
-        pub reserved1: [*mut c_void; 256],
-    }
-
-    impl Default for NV_ENC_PRESET_CONFIG {
-        fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(4),
-                presetCfg: NV_ENC_CONFIG::default(),
-                reserved1: [std::ptr::null_mut(); 256],
-            }
-        }
-    }
-
+    // SDK 12.2: 1536 bytes, version = NVENCAPI_STRUCT_VERSION(5)
     #[repr(C)]
     pub struct NV_ENC_REGISTER_RESOURCE {
         pub version: u32,
@@ -516,30 +525,25 @@ pub(crate) mod ffi {
         pub resourceToRegister: *mut c_void,
         pub registeredResource: *mut c_void,
         pub bufferFormat: NV_ENC_BUFFER_FORMAT,
-        pub bufferUsage: u32,
-        pub reserved1: [u32; 4],
-        pub reserved2: [*mut c_void; 62],
+        pub bufferUsage: u32,              // NV_ENC_BUFFER_USAGE
+        pub pInputFencePoint: *mut c_void, // NV_ENC_FENCE_POINT_D3D12*
+        pub chromaOffset: [u32; 2],
+        pub reserved1: [u32; 246],
+        pub reserved2: [*mut c_void; 61],
     }
 
     impl Default for NV_ENC_REGISTER_RESOURCE {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(3),
-                resourceType: NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX,
-                width: 0,
-                height: 0,
-                pitch: 0,
-                subResourceIndex: 0,
-                resourceToRegister: std::ptr::null_mut(),
-                registeredResource: std::ptr::null_mut(),
-                bufferFormat: NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED,
-                bufferUsage: 1, // NV_ENC_INPUT_IMAGE
-                reserved1: [0; 4],
-                reserved2: [std::ptr::null_mut(); 62],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(5);
+            s.resourceType = NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+            s.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED;
+            s.bufferUsage = 1; // NV_ENC_INPUT_IMAGE
+            s
         }
     }
 
+    // SDK 12.2: 1544 bytes, version = NVENCAPI_STRUCT_VERSION(4)
     #[repr(C)]
     pub struct NV_ENC_MAP_INPUT_RESOURCE {
         pub version: u32,
@@ -548,25 +552,95 @@ pub(crate) mod ffi {
         pub registeredResource: *mut c_void,
         pub mappedResource: *mut c_void,
         pub mappedBufferFmt: NV_ENC_BUFFER_FORMAT,
-        pub reserved1: [u32; 6],
-        pub reserved2: [*mut c_void; 57],
+        pub reserved1: [u32; 251],
+        pub reserved2: [*mut c_void; 63],
     }
 
     impl Default for NV_ENC_MAP_INPUT_RESOURCE {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(4),
-                subResourceIndex: 0,
-                inputResource: std::ptr::null_mut(),
-                registeredResource: std::ptr::null_mut(),
-                mappedResource: std::ptr::null_mut(),
-                mappedBufferFmt: NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED,
-                reserved1: [0; 6],
-                reserved2: [std::ptr::null_mut(); 57],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(4);
+            s.mappedBufferFmt = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED;
+            s
         }
     }
 
+    // SDK 12.2: NV_ENC_PIC_PARAMS_H264 = 1536 bytes
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_PIC_PARAMS_H264 {
+        pub displayPOCSyntax: u32,
+        pub reserved3: u32,
+        pub refPicFlag: u32,
+        pub colourPlaneId: u32,
+        pub forceIntraRefreshWithFrameCnt: u32,
+        pub h264_pic_flags: u32, // constrainedFrame:1, sliceModeDataUpdate:1, ltrMarkFrame:1, ltrUseFrames:1, reservedBitFields:28
+        pub sliceTypeData: *mut u8,
+        pub sliceTypeArrayCnt: u32,
+        pub seiPayloadArrayCnt: u32,
+        pub seiPayloadArray: *mut c_void, // NV_ENC_SEI_PAYLOAD*
+        pub sliceMode: u32,
+        pub sliceModeData: u32,
+        pub ltrMarkFrameIdx: u32,
+        pub ltrUseFrameBitmap: u32,
+        pub ltrUsageMode: u32,
+        pub forceIntraSliceCount: u32,
+        pub forceIntraSliceIdx: *mut u32,
+        pub h264ExtPicParams: NV_ENC_PIC_PARAMS_H264_EXT, // 128 bytes
+        pub timeCode: NV_ENC_TIME_CODE,                   // 32 bytes
+        pub reserved: [u32; 202],
+        pub reserved2: [*mut c_void; 61],
+    }
+
+    impl Default for NV_ENC_PIC_PARAMS_H264 {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: NV_ENC_PIC_PARAMS_HEVC = 1536 bytes
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NV_ENC_PIC_PARAMS_HEVC {
+        pub displayPOCSyntax: u32,
+        pub refPicFlag: u32,
+        pub temporalId: u32,
+        pub forceIntraRefreshWithFrameCnt: u32,
+        pub hevc_pic_flags: u32, // constrainedFrame:1, sliceModeDataUpdate:1, ltrMarkFrame:1, ltrUseFrames:1, reservedBitFields:28
+        pub reserved1: u32,
+        pub sliceTypeData: *mut u8,
+        pub sliceTypeArrayCnt: u32,
+        pub sliceMode: u32,
+        pub sliceModeData: u32,
+        pub ltrMarkFrameIdx: u32,
+        pub ltrUseFrameBitmap: u32,
+        pub ltrUsageMode: u32,
+        pub seiPayloadArrayCnt: u32,
+        pub _reserved_pad: u32,
+        pub seiPayloadArray: *mut c_void, // NV_ENC_SEI_PAYLOAD*
+        pub timeCode: NV_ENC_TIME_CODE,   // 32 bytes
+        pub reserved2: [u32; 236],
+        pub reserved3: [*mut c_void; 61],
+    }
+
+    impl Default for NV_ENC_PIC_PARAMS_HEVC {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    // SDK 12.2: NV_ENC_CODEC_PIC_PARAMS = 1544 bytes (union, reserved[256] + padding)
+    // Actual size driven by largest member. reserved[256] = 1024 bytes, but H264/HEVC are 1536 bytes.
+    // So the union is 1536 bytes, plus possible padding. SDK says reserved[256] but actual size
+    // must accommodate the larger members. Let's match the SDK sizeof = 1544.
+    #[repr(C)]
+    pub union NV_ENC_CODEC_PIC_PARAMS {
+        pub h264PicParams: NV_ENC_PIC_PARAMS_H264,
+        pub hevcPicParams: NV_ENC_PIC_PARAMS_HEVC,
+        pub reserved: [u32; 386], // 1544 bytes to match SDK sizeof
+    }
+
+    // SDK 12.2: 3360 bytes, version = NVENCAPI_STRUCT_VERSION(7) | (1<<31)
     #[repr(C)]
     pub struct NV_ENC_PIC_PARAMS {
         pub version: u32,
@@ -581,87 +655,41 @@ pub(crate) mod ffi {
         pub outputBitstream: *mut c_void,
         pub completionEvent: *mut c_void,
         pub bufferFmt: NV_ENC_BUFFER_FORMAT,
-        pub pictureStruct: u32,
+        pub pictureStruct: u32, // NV_ENC_PIC_STRUCT
         pub pictureType: NV_ENC_PIC_TYPE,
-        pub codecPicParams: NV_ENC_CODEC_PIC_PARAMS,
-        pub reserved1: [u32; 6],
-        pub reserved2: [*mut c_void; 58],
-    }
-
-    #[repr(C)]
-    pub union NV_ENC_CODEC_PIC_PARAMS {
-        pub h264PicParams: NV_ENC_PIC_PARAMS_H264,
-        pub hevcPicParams: NV_ENC_PIC_PARAMS_HEVC,
-        pub reserved: [u32; 256],
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct NV_ENC_PIC_PARAMS_H264 {
-        pub displayPOCSyntax: u32,
-        pub reserved3: u32,
-        pub refPicFlag: u32,
-        pub colourPlaneId: u32,
-        pub forceIntraRefreshWithFrameCnt: u32,
-        pub constrainedFrame: u32,
-        pub sliceModeData: u32,
-        pub ltrMarkFrame: u32,
-        pub ltrUseFrames: u32,
+        pub codecPicParams: NV_ENC_CODEC_PIC_PARAMS, // 1544 bytes
+        pub meHintCountsPerBlock: [NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE; 2], // 32 bytes
+        pub meExternalHints: *mut c_void,
+        pub reserved2: [u32; 7],
+        pub reserved5: [*mut c_void; 2],
+        pub qpDeltaMap: *mut i8,
+        pub qpDeltaMapSize: u32,
         pub reservedBitFields: u32,
-        pub sliceMode: u32,
-        pub sliceType: [u32; 3],
-        pub reserved: [u32; 11],
-        pub reserved1: [*mut c_void; 62],
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct NV_ENC_PIC_PARAMS_HEVC {
-        pub displayPOCSyntax: u32,
-        pub refPicFlag: u32,
-        pub temporalId: u32,
-        pub forceIntraRefreshWithFrameCnt: u32,
-        pub constrainedFrame: u32,
-        pub sliceModeData: u32,
-        pub ltrMarkFrame: u32,
-        pub ltrUseFrames: u32,
-        pub reservedBitFields: u32,
-        pub sliceMode: u32,
-        pub sliceType: [u32; 3],
-        pub reserved: [u32; 12],
-        pub reserved1: [*mut c_void; 61],
+        pub meHintRefPicDist: [u16; 2],
+        pub reserved4: u32,
+        pub alphaBuffer: *mut c_void,
+        pub meExternalSbHints: *mut c_void,
+        pub meSbHintsCount: u32,
+        pub stateBufferIdx: u32,
+        pub outputReconBuffer: *mut c_void,
+        pub reserved3: [u32; 284],
+        pub reserved6: [*mut c_void; 57],
     }
 
     impl Default for NV_ENC_PIC_PARAMS {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(4),
-                inputWidth: 0,
-                inputHeight: 0,
-                inputPitch: 0,
-                encodePicFlags: 0,
-                frameIdx: 0,
-                inputTimeStamp: 0,
-                inputDuration: 0,
-                inputBuffer: std::ptr::null_mut(),
-                outputBitstream: std::ptr::null_mut(),
-                completionEvent: std::ptr::null_mut(),
-                bufferFmt: NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED,
-                pictureStruct: 0,
-                pictureType: NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_UNKNOWN,
-                codecPicParams: NV_ENC_CODEC_PIC_PARAMS { reserved: [0; 256] },
-                reserved1: [0; 6],
-                reserved2: [std::ptr::null_mut(); 58],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version_high(7);
+            s.pictureType = NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_UNKNOWN;
+            s
         }
     }
 
+    // SDK 12.2: 1544 bytes, version = NVENCAPI_STRUCT_VERSION(2) | (1<<31)
     #[repr(C)]
     pub struct NV_ENC_LOCK_BITSTREAM {
         pub version: u32,
-        pub doNotWait: u32,
-        pub ltrFrame: u32,
-        pub reservedBitFields: u32,
+        pub lock_flags: u32, // doNotWait:1, ltrFrame:1, getRCStats:1, reservedBitFields:29
         pub outputBitstream: *mut c_void,
         pub sliceOffsets: *mut u32,
         pub frameIdx: u32,
@@ -672,43 +700,35 @@ pub(crate) mod ffi {
         pub outputDuration: u64,
         pub bitstreamBufferPtr: *mut c_void,
         pub pictureType: NV_ENC_PIC_TYPE,
-        pub pictureStruct: u32,
+        pub pictureStruct: u32, // NV_ENC_PIC_STRUCT
         pub frameAvgQP: u32,
         pub frameSatd: u32,
         pub ltrFrameIdx: u32,
         pub ltrFrameBitmap: u32,
-        pub reserved: [u32; 12],
-        pub reserved1: [*mut c_void; 58],
+        pub temporalId: u32,
+        pub intraMBCount: u32,
+        pub interMBCount: u32,
+        pub averageMVX: i32,
+        pub averageMVY: i32,
+        pub alphaLayerSizeInBytes: u32,
+        pub outputStatsPtrSize: u32,
+        pub _reserved_pad: u32,
+        pub outputStatsPtr: *mut c_void,
+        pub frameIdxDisplay: u32,
+        pub reserved1: [u32; 219],
+        pub reserved2: [*mut c_void; 63],
+        pub reservedInternal: [u32; 8],
     }
 
     impl Default for NV_ENC_LOCK_BITSTREAM {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(1),
-                doNotWait: 0,
-                ltrFrame: 0,
-                reservedBitFields: 0,
-                outputBitstream: std::ptr::null_mut(),
-                sliceOffsets: std::ptr::null_mut(),
-                frameIdx: 0,
-                hwEncodeStatus: 0,
-                numSlices: 0,
-                bitstreamSizeInBytes: 0,
-                outputTimeStamp: 0,
-                outputDuration: 0,
-                bitstreamBufferPtr: std::ptr::null_mut(),
-                pictureType: NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_UNKNOWN,
-                pictureStruct: 0,
-                frameAvgQP: 0,
-                frameSatd: 0,
-                ltrFrameIdx: 0,
-                ltrFrameBitmap: 0,
-                reserved: [0; 12],
-                reserved1: [std::ptr::null_mut(); 58],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version_high(2);
+            s
         }
     }
 
+    // SDK 12.2: 776 bytes, version = NVENCAPI_STRUCT_VERSION(1)
     #[repr(C)]
     pub struct NV_ENC_CREATE_BITSTREAM_BUFFER {
         pub version: u32,
@@ -723,20 +743,14 @@ pub(crate) mod ffi {
 
     impl Default for NV_ENC_CREATE_BITSTREAM_BUFFER {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(1),
-                size: 0,
-                memoryHeap: 0,
-                reserved: 0,
-                bitstreamBuffer: std::ptr::null_mut(),
-                bitstreamBufferPtr: std::ptr::null_mut(),
-                reserved1: [0; 58],
-                reserved2: [std::ptr::null_mut(); 64],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(1);
+            s
         }
     }
 
-    // Function pointer types
+    // ── Function pointer types ──
+
     pub type PFnNvEncOpenEncodeSessionEx = unsafe extern "C" fn(
         params: *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
         encoder: *mut *mut c_void,
@@ -759,7 +773,7 @@ pub(crate) mod ffi {
 
     pub type PFnNvEncCreateInputBuffer = unsafe extern "C" fn(
         encoder: *mut c_void,
-        params: *mut NV_ENC_CREATE_BITSTREAM_BUFFER, // Using bitstream buffer struct for input too
+        params: *mut NV_ENC_CREATE_BITSTREAM_BUFFER,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncDestroyInputBuffer =
@@ -810,128 +824,66 @@ pub(crate) mod ffi {
         preset_config: *mut NV_ENC_PRESET_CONFIG,
     ) -> NVENCSTATUS;
 
-    // Function list struct — must match NVENC SDK 12.2 layout exactly.
-    //
-    // Each named field occupies one function-pointer slot (8 bytes on 64-bit).
-    // The SDK fills this struct by offset, so even unused slots must be present
-    // at the correct position.  Unused slots use `*mut c_void` placeholders.
-    //
-    // Reference: nvEncodeAPI.h `NV_ENCODE_API_FUNCTION_LIST` (SDK 12.2)
+    // ── Function list (SDK 12.2, 319 fn-ptr slots) ──
+
     #[repr(C)]
     pub struct NV_ENCODE_API_FUNCTION_LIST {
-        pub version: u32,  // +0
-        pub reserved: u32, // +4
-        // ── slots 1–7 (correct in previous version) ──
-        pub _nvEncOpenEncodeSession: *mut c_void, // slot  1 (deprecated)
-        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  2
-        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot  3
-        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  4
-        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot  5
-        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  6
-        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>, // slot  7
-        // ── slot 8 was missing ──
-        pub _nvEncGetEncodeCaps: *mut c_void, // slot  8
-        // ── slots 9–11 (shifted by 1 in previous version) ──
-        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  9
-        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>,     // slot 10
-        pub _nvEncGetEncodePresetConfig: *mut c_void, // slot 11 (non-Ex, unused)
-        // ── slots 12–16 (were correct) ──
-        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>, // slot 12
-        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>, // slot 13
-        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>, // slot 14
-        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>, // slot 15
-        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>, // slot 16
-        // ── slots 17–19 (were at wrong positions) ──
-        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>, // slot 17
-        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>, // slot 18
-        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>, // slot 19
-        // ── slots 20–25 (were entirely missing) ──
-        pub _nvEncLockInputBuffer: *mut c_void,      // slot 20
-        pub _nvEncUnlockInputBuffer: *mut c_void,    // slot 21
-        pub _nvEncGetEncodeStats: *mut c_void,       // slot 22
-        pub _nvEncGetSequenceParams: *mut c_void,    // slot 23
-        pub _nvEncRegisterAsyncEvent: *mut c_void,   // slot 24
-        pub _nvEncUnregisterAsyncEvent: *mut c_void, // slot 25
-        // ── slots 26–28 (were at wrong positions) ──
-        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>, // slot 26
-        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>, // slot 27
-        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>,     // slot 28
-        // ── slots 29–33 (were missing) ──
-        pub _nvEncInvalidateRefFrames: *mut c_void, // slot 29
-        pub nvEncOpenEncodeSessionEx: Option<PFnNvEncOpenEncodeSessionEx>, // slot 30
-        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>, // slot 31
-        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>, // slot 32
-        pub _nvEncReconfigureEncoder: *mut c_void,  // slot 33
-        // ── slot 34 (reserved in SDK) ──
-        pub _reserved1: *mut c_void, // slot 34
-        // ── slots 35–39 (unused newer functions) ──
-        pub _nvEncCreateMVBuffer: *mut c_void,  // slot 35
-        pub _nvEncDestroyMVBuffer: *mut c_void, // slot 36
-        pub _nvEncRunMotionEstimationOnly: *mut c_void, // slot 37
-        pub _nvEncGetLastErrorString: *mut c_void, // slot 38
-        pub _nvEncSetIOCudaStreams: *mut c_void, // slot 39
-        // ── slot 40: the preset config Ex function we actually use ──
-        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>, // slot 40
-        // ── slots 41–42 (unused newer functions) ──
-        pub _nvEncGetSequenceParamEx: *mut c_void, // slot 41
-        pub _nvEncLookaheadPicture: *mut c_void,   // slot 42
-        // ── remaining reserved slots to reach 319 total function pointer slots ──
-        pub _reserved2: [*mut c_void; 277], // slots 43–319
+        pub version: u32,
+        pub reserved: u32,
+        pub _nvEncOpenEncodeSession: *mut c_void,
+        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
+        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
+        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
+        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
+        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>,
+        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>,
+        pub _nvEncGetEncodeCaps: *mut c_void,
+        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>,
+        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
+        pub _nvEncGetEncodePresetConfig: *mut c_void,
+        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>,
+        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>,
+        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>,
+        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>,
+        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>,
+        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>,
+        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>,
+        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>,
+        pub _nvEncLockInputBuffer: *mut c_void,
+        pub _nvEncUnlockInputBuffer: *mut c_void,
+        pub _nvEncGetEncodeStats: *mut c_void,
+        pub _nvEncGetSequenceParams: *mut c_void,
+        pub _nvEncRegisterAsyncEvent: *mut c_void,
+        pub _nvEncUnregisterAsyncEvent: *mut c_void,
+        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>,
+        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>,
+        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>,
+        pub _nvEncInvalidateRefFrames: *mut c_void,
+        pub nvEncOpenEncodeSessionEx: Option<PFnNvEncOpenEncodeSessionEx>,
+        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>,
+        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>,
+        pub _nvEncReconfigureEncoder: *mut c_void,
+        pub _reserved1: *mut c_void,
+        pub _nvEncCreateMVBuffer: *mut c_void,
+        pub _nvEncDestroyMVBuffer: *mut c_void,
+        pub _nvEncRunMotionEstimationOnly: *mut c_void,
+        pub _nvEncGetLastErrorString: *mut c_void,
+        pub _nvEncSetIOCudaStreams: *mut c_void,
+        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>,
+        pub _nvEncGetSequenceParamEx: *mut c_void,
+        pub _nvEncLookaheadPicture: *mut c_void,
+        pub _reserved2: [*mut c_void; 277],
     }
 
     impl Default for NV_ENCODE_API_FUNCTION_LIST {
         fn default() -> Self {
-            Self {
-                version: struct_ver::<Self>(2),
-                reserved: 0,
-                _nvEncOpenEncodeSession: std::ptr::null_mut(),
-                nvEncGetEncodeGUIDCount: None,
-                nvEncGetEncodeGUIDs: None,
-                nvEncGetEncodeProfileGUIDCount: None,
-                nvEncGetEncodeProfileGUIDs: None,
-                nvEncGetInputFormatCount: None,
-                nvEncGetInputFormats: None,
-                _nvEncGetEncodeCaps: std::ptr::null_mut(),
-                nvEncGetEncodePresetCount: None,
-                nvEncGetEncodePresetGUIDs: None,
-                _nvEncGetEncodePresetConfig: std::ptr::null_mut(),
-                nvEncInitializeEncoder: None,
-                nvEncCreateInputBuffer: None,
-                nvEncDestroyInputBuffer: None,
-                nvEncCreateBitstreamBuffer: None,
-                nvEncDestroyBitstreamBuffer: None,
-                nvEncEncodePicture: None,
-                nvEncLockBitstream: None,
-                nvEncUnlockBitstream: None,
-                _nvEncLockInputBuffer: std::ptr::null_mut(),
-                _nvEncUnlockInputBuffer: std::ptr::null_mut(),
-                _nvEncGetEncodeStats: std::ptr::null_mut(),
-                _nvEncGetSequenceParams: std::ptr::null_mut(),
-                _nvEncRegisterAsyncEvent: std::ptr::null_mut(),
-                _nvEncUnregisterAsyncEvent: std::ptr::null_mut(),
-                nvEncMapInputResource: None,
-                nvEncUnmapInputResource: None,
-                nvEncDestroyEncoder: None,
-                _nvEncInvalidateRefFrames: std::ptr::null_mut(),
-                nvEncOpenEncodeSessionEx: None,
-                nvEncRegisterResource: None,
-                nvEncUnregisterResource: None,
-                _nvEncReconfigureEncoder: std::ptr::null_mut(),
-                _reserved1: std::ptr::null_mut(),
-                _nvEncCreateMVBuffer: std::ptr::null_mut(),
-                _nvEncDestroyMVBuffer: std::ptr::null_mut(),
-                _nvEncRunMotionEstimationOnly: std::ptr::null_mut(),
-                _nvEncGetLastErrorString: std::ptr::null_mut(),
-                _nvEncSetIOCudaStreams: std::ptr::null_mut(),
-                nvEncGetEncodePresetConfigEx: None,
-                _nvEncGetSequenceParamEx: std::ptr::null_mut(),
-                _nvEncLookaheadPicture: std::ptr::null_mut(),
-                _reserved2: [std::ptr::null_mut(); 277],
-            }
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = nvencapi_struct_version(2);
+            s
         }
     }
 
-    // Entry point function type
+    // Entry point
     pub type PFnNvEncodeAPICreateInstance =
         unsafe extern "C" fn(function_list: *mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
 
@@ -962,192 +914,139 @@ pub(crate) mod ffi {
 
         const PTR: usize = mem::size_of::<*mut c_void>();
 
-        // ── struct total size ──
+        // ── SDK 12.2 struct sizes (from nvEncodeAPI.h compiled with cc) ──
 
         #[test]
-        fn function_list_total_size() {
-            // version(4) + reserved(4) + 319 function-pointer slots
-            let expected = 4 + 4 + 319 * PTR;
-            assert_eq!(
-                mem::size_of::<NV_ENCODE_API_FUNCTION_LIST>(),
-                expected,
-                "NV_ENCODE_API_FUNCTION_LIST size mismatch — SDK expects 319 fn-ptr slots"
-            );
-        }
-
-        // ── critical field offsets (must match NVENC SDK 12.2) ──
-
-        #[test]
-        fn offset_open_encode_session_ex() {
-            // Slot 30 → offset = 8 + 29 * PTR
-            let expected = 8 + 29 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncOpenEncodeSessionEx),
-                expected,
-                "nvEncOpenEncodeSessionEx must be at SDK slot 30"
-            );
+        fn size_nv_enc_rc_params() {
+            assert_eq!(mem::size_of::<NV_ENC_RC_PARAMS>(), 128);
         }
 
         #[test]
-        fn offset_encode_picture() {
-            // Slot 17 → offset = 8 + 16 * PTR
-            let expected = 8 + 16 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncEncodePicture),
-                expected,
-                "nvEncEncodePicture must be at SDK slot 17"
-            );
+        fn size_nv_enc_config_h264() {
+            assert_eq!(mem::size_of::<NV_ENC_CONFIG_H264>(), 1792);
         }
 
         #[test]
-        fn offset_lock_bitstream() {
-            // Slot 18 → offset = 8 + 17 * PTR
-            let expected = 8 + 17 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncLockBitstream),
-                expected,
-                "nvEncLockBitstream must be at SDK slot 18"
-            );
+        fn size_nv_enc_config_hevc() {
+            assert_eq!(mem::size_of::<NV_ENC_CONFIG_HEVC>(), 1560);
         }
 
         #[test]
-        fn offset_unlock_bitstream() {
-            // Slot 19 → offset = 8 + 18 * PTR
-            let expected = 8 + 18 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnlockBitstream),
-                expected,
-                "nvEncUnlockBitstream must be at SDK slot 19"
-            );
+        fn size_nv_enc_codec_config() {
+            assert_eq!(mem::size_of::<NV_ENC_CODEC_CONFIG>(), 1792);
         }
 
         #[test]
-        fn offset_map_input_resource() {
-            // Slot 26 → offset = 8 + 25 * PTR
-            let expected = 8 + 25 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncMapInputResource),
-                expected,
-                "nvEncMapInputResource must be at SDK slot 26"
-            );
+        fn size_nv_enc_config() {
+            assert_eq!(mem::size_of::<NV_ENC_CONFIG>(), 3584);
         }
 
         #[test]
-        fn offset_unmap_input_resource() {
-            // Slot 27 → offset = 8 + 26 * PTR
-            let expected = 8 + 26 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnmapInputResource),
-                expected,
-                "nvEncUnmapInputResource must be at SDK slot 27"
-            );
+        fn size_nv_enc_preset_config() {
+            assert_eq!(mem::size_of::<NV_ENC_PRESET_CONFIG>(), 5128);
         }
 
         #[test]
-        fn offset_destroy_encoder() {
-            // Slot 28 → offset = 8 + 27 * PTR
-            let expected = 8 + 27 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyEncoder),
-                expected,
-                "nvEncDestroyEncoder must be at SDK slot 28"
-            );
+        fn size_nv_enc_initialize_params() {
+            assert_eq!(mem::size_of::<NV_ENC_INITIALIZE_PARAMS>(), 1800);
         }
 
         #[test]
-        fn offset_register_resource() {
-            // Slot 31 → offset = 8 + 30 * PTR
-            let expected = 8 + 30 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncRegisterResource),
-                expected,
-                "nvEncRegisterResource must be at SDK slot 31"
-            );
+        fn size_nv_enc_open_encode_session_ex_params() {
+            assert_eq!(mem::size_of::<NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS>(), 1552);
         }
 
         #[test]
-        fn offset_unregister_resource() {
-            // Slot 32 → offset = 8 + 31 * PTR
-            let expected = 8 + 31 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnregisterResource),
-                expected,
-                "nvEncUnregisterResource must be at SDK slot 32"
-            );
+        fn size_nv_enc_register_resource() {
+            assert_eq!(mem::size_of::<NV_ENC_REGISTER_RESOURCE>(), 1536);
         }
 
         #[test]
-        fn offset_initialize_encoder() {
-            // Slot 12 → offset = 8 + 11 * PTR
-            let expected = 8 + 11 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncInitializeEncoder),
-                expected,
-                "nvEncInitializeEncoder must be at SDK slot 12"
-            );
+        fn size_nv_enc_map_input_resource() {
+            assert_eq!(mem::size_of::<NV_ENC_MAP_INPUT_RESOURCE>(), 1544);
         }
 
         #[test]
-        fn offset_create_bitstream_buffer() {
-            // Slot 15 → offset = 8 + 14 * PTR
-            let expected = 8 + 14 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncCreateBitstreamBuffer),
-                expected,
-                "nvEncCreateBitstreamBuffer must be at SDK slot 15"
-            );
+        fn size_nv_enc_create_bitstream_buffer() {
+            assert_eq!(mem::size_of::<NV_ENC_CREATE_BITSTREAM_BUFFER>(), 776);
         }
 
         #[test]
-        fn offset_destroy_bitstream_buffer() {
-            // Slot 16 → offset = 8 + 15 * PTR
-            let expected = 8 + 15 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyBitstreamBuffer),
-                expected,
-                "nvEncDestroyBitstreamBuffer must be at SDK slot 16"
-            );
+        fn size_nv_enc_lock_bitstream() {
+            assert_eq!(mem::size_of::<NV_ENC_LOCK_BITSTREAM>(), 1544);
         }
 
         #[test]
-        fn offset_get_encode_preset_config_ex() {
-            // Slot 40 → offset = 8 + 39 * PTR
-            let expected = 8 + 39 * PTR;
-            assert_eq!(
-                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodePresetConfigEx),
-                expected,
-                "nvEncGetEncodePresetConfigEx must be at SDK slot 40"
-            );
+        fn size_nv_enc_pic_params() {
+            assert_eq!(mem::size_of::<NV_ENC_PIC_PARAMS>(), 3360);
         }
 
-        // ── version defaults ──
+        // ── SDK 12.2 version values ──
 
         #[test]
-        fn function_list_version_default() {
-            let list = NV_ENCODE_API_FUNCTION_LIST::default();
-            assert_eq!(list.version, struct_ver::<NV_ENCODE_API_FUNCTION_LIST>(2));
+        fn nvencapi_version_value() {
+            assert_eq!(NVENCAPI_VERSION, 0x0200_000C);
         }
 
         #[test]
-        fn session_params_version_default() {
+        fn version_nv_enc_open_encode_session_ex_params() {
             let params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
-            assert_eq!(
-                params.version,
-                struct_ver::<NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS>(1)
-            );
+            assert_eq!(params.version, 0x7201_000C);
             assert_eq!(params.apiVersion, NVENCAPI_VERSION);
         }
 
         #[test]
-        fn initialize_params_version_default() {
-            let params = NV_ENC_INITIALIZE_PARAMS::default();
-            assert_eq!(params.version, struct_ver::<NV_ENC_INITIALIZE_PARAMS>(5));
+        fn version_nv_enc_config() {
+            let config = NV_ENC_CONFIG::default();
+            assert_eq!(config.version, 0xF209_000C);
         }
 
         #[test]
-        fn config_version_default() {
-            let config = NV_ENC_CONFIG::default();
-            assert_eq!(config.version, struct_ver::<NV_ENC_CONFIG>(7));
+        fn version_nv_enc_preset_config() {
+            let config = NV_ENC_PRESET_CONFIG::default();
+            assert_eq!(config.version, 0xF205_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_initialize_params() {
+            let params = NV_ENC_INITIALIZE_PARAMS::default();
+            assert_eq!(params.version, 0xF207_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_register_resource() {
+            let res = NV_ENC_REGISTER_RESOURCE::default();
+            assert_eq!(res.version, 0x7205_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_map_input_resource() {
+            let res = NV_ENC_MAP_INPUT_RESOURCE::default();
+            assert_eq!(res.version, 0x7204_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_lock_bitstream() {
+            let bs = NV_ENC_LOCK_BITSTREAM::default();
+            assert_eq!(bs.version, 0xF202_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_pic_params() {
+            let p = NV_ENC_PIC_PARAMS::default();
+            assert_eq!(p.version, 0xF207_000C);
+        }
+
+        #[test]
+        fn version_nv_enc_create_bitstream_buffer() {
+            let b = NV_ENC_CREATE_BITSTREAM_BUFFER::default();
+            assert_eq!(b.version, 0x7201_000C);
+        }
+
+        #[test]
+        fn version_nv_encode_api_function_list() {
+            let list = NV_ENCODE_API_FUNCTION_LIST::default();
+            assert_eq!(list.version, 0x7202_000C);
         }
 
         #[test]
@@ -1158,6 +1057,166 @@ pub(crate) mod ffi {
                 "NV_ENC_ERR_RESOURCE_REGISTER_FAILED"
             );
             assert_eq!(nvenc_status_to_string(999), "UNKNOWN_NVENC_ERROR");
+        }
+
+        // ── Struct configuration API (mirrors how nvenc.rs should use them) ──
+
+        #[test]
+        fn configure_rc_params_via_bitflags() {
+            let mut rc = NV_ENC_RC_PARAMS::default();
+            rc.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+            rc.averageBitRate = 20_000_000;
+            rc.maxBitRate = 24_000_000;
+            rc.rc_flags = RC_FLAG_ENABLE_AQ | RC_FLAG_ZERO_REORDER_DELAY;
+
+            assert_eq!(rc.rc_flags & RC_FLAG_ENABLE_AQ, RC_FLAG_ENABLE_AQ);
+            assert_eq!(
+                rc.rc_flags & RC_FLAG_ZERO_REORDER_DELAY,
+                RC_FLAG_ZERO_REORDER_DELAY
+            );
+        }
+
+        #[test]
+        fn configure_hevc_config_via_bitflags() {
+            let mut hevc = NV_ENC_CONFIG_HEVC::default();
+            hevc.hevc_flags = HEVC_FLAG_REPEAT_SPS_PPS | (1 << HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT); // chromaFormatIDC = 1 (YUV420)
+
+            assert_ne!(hevc.hevc_flags & HEVC_FLAG_REPEAT_SPS_PPS, 0);
+        }
+
+        #[test]
+        fn configure_h264_config_via_bitflags() {
+            let mut h264 = NV_ENC_CONFIG_H264::default();
+            h264.h264_flags = H264_FLAG_REPEAT_SPS_PPS;
+
+            assert_ne!(h264.h264_flags & H264_FLAG_REPEAT_SPS_PPS, 0);
+        }
+
+        #[test]
+        fn configure_init_params_with_tuning_info() {
+            let mut params = NV_ENC_INITIALIZE_PARAMS::default();
+            params.encodeGUID = NV_ENC_CODEC_HEVC_GUID;
+            params.presetGUID = NV_ENC_PRESET_P1_GUID;
+            params.encodeWidth = 1920;
+            params.encodeHeight = 1080;
+            params.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+
+            assert_eq!(
+                params.tuningInfo,
+                NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY
+            );
+        }
+
+        // ── Function list layout (must match SDK 12.2 slot positions) ──
+
+        #[test]
+        fn function_list_total_size() {
+            let expected = 4 + 4 + 319 * PTR;
+            assert_eq!(mem::size_of::<NV_ENCODE_API_FUNCTION_LIST>(), expected);
+        }
+
+        #[test]
+        fn offset_open_encode_session_ex() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncOpenEncodeSessionEx),
+                8 + 29 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_encode_picture() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncEncodePicture),
+                8 + 16 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_lock_bitstream() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncLockBitstream),
+                8 + 17 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_unlock_bitstream() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnlockBitstream),
+                8 + 18 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_map_input_resource() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncMapInputResource),
+                8 + 25 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_unmap_input_resource() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnmapInputResource),
+                8 + 26 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_destroy_encoder() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyEncoder),
+                8 + 27 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_register_resource() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncRegisterResource),
+                8 + 30 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_unregister_resource() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnregisterResource),
+                8 + 31 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_initialize_encoder() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncInitializeEncoder),
+                8 + 11 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_create_bitstream_buffer() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncCreateBitstreamBuffer),
+                8 + 14 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_destroy_bitstream_buffer() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyBitstreamBuffer),
+                8 + 15 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_get_encode_preset_config_ex() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodePresetConfigEx),
+                8 + 39 * PTR
+            );
         }
     }
 }
