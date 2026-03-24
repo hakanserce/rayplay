@@ -40,6 +40,24 @@ pub(crate) mod ffi {
         nvencapi_struct_version(ver) | (1 << 31)
     }
 
+    // ── Driver version helpers ──
+
+    /// Encodes our SDK version in the format returned by `NvEncodeAPIGetMaxSupportedVersion`.
+    /// Format: `(major << 4) | minor`.
+    pub const fn nvencapi_max_version() -> u32 {
+        (NVENCAPI_MAJOR_VERSION << 4) | NVENCAPI_MINOR_VERSION
+    }
+
+    /// Decodes a packed max-version value into `(major, minor)`.
+    pub const fn unpack_max_version(packed: u32) -> (u32, u32) {
+        (packed >> 4, packed & 0xF)
+    }
+
+    /// Returns `true` if the driver's max supported version is >= the SDK version we require.
+    pub const fn is_driver_version_compatible(driver_max: u32, sdk_required: u32) -> bool {
+        driver_max >= sdk_required
+    }
+
     // ── GUID ──
 
     #[repr(C)]
@@ -766,75 +784,80 @@ pub(crate) mod ffi {
 
     // ── Function pointer types ──
 
-    pub type PFnNvEncOpenEncodeSessionEx = unsafe extern "C" fn(
+    pub type PFnNvEncOpenEncodeSessionEx = unsafe extern "system" fn(
         params: *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
         encoder: *mut *mut c_void,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncGetEncodeGUIDCount =
-        unsafe extern "C" fn(encoder: *mut c_void, count: *mut u32) -> NVENCSTATUS;
+        unsafe extern "system" fn(encoder: *mut c_void, count: *mut u32) -> NVENCSTATUS;
 
-    pub type PFnNvEncGetEncodeGUIDs = unsafe extern "C" fn(
+    pub type PFnNvEncGetEncodeGUIDs = unsafe extern "system" fn(
         encoder: *mut c_void,
         guids: *mut GUID,
         arraysize: u32,
         count: *mut u32,
     ) -> NVENCSTATUS;
 
-    pub type PFnNvEncInitializeEncoder = unsafe extern "C" fn(
+    pub type PFnNvEncInitializeEncoder = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_INITIALIZE_PARAMS,
     ) -> NVENCSTATUS;
 
-    pub type PFnNvEncCreateInputBuffer = unsafe extern "C" fn(
+    pub type PFnNvEncCreateInputBuffer = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_CREATE_BITSTREAM_BUFFER,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncDestroyInputBuffer =
-        unsafe extern "C" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
+        unsafe extern "system" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
 
-    pub type PFnNvEncCreateBitstreamBuffer = unsafe extern "C" fn(
+    pub type PFnNvEncCreateBitstreamBuffer = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_CREATE_BITSTREAM_BUFFER,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncDestroyBitstreamBuffer =
-        unsafe extern "C" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
+        unsafe extern "system" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
 
-    pub type PFnNvEncRegisterResource = unsafe extern "C" fn(
+    pub type PFnNvEncRegisterResource = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_REGISTER_RESOURCE,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncUnregisterResource =
-        unsafe extern "C" fn(encoder: *mut c_void, resource: *mut c_void) -> NVENCSTATUS;
+        unsafe extern "system" fn(encoder: *mut c_void, resource: *mut c_void) -> NVENCSTATUS;
 
-    pub type PFnNvEncMapInputResource = unsafe extern "C" fn(
+    pub type PFnNvEncMapInputResource = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_MAP_INPUT_RESOURCE,
     ) -> NVENCSTATUS;
 
-    pub type PFnNvEncUnmapInputResource =
-        unsafe extern "C" fn(encoder: *mut c_void, mapped_resource: *mut c_void) -> NVENCSTATUS;
+    pub type PFnNvEncUnmapInputResource = unsafe extern "system" fn(
+        encoder: *mut c_void,
+        mapped_resource: *mut c_void,
+    ) -> NVENCSTATUS;
 
-    pub type PFnNvEncEncodePicture =
-        unsafe extern "C" fn(encoder: *mut c_void, params: *mut NV_ENC_PIC_PARAMS) -> NVENCSTATUS;
+    pub type PFnNvEncEncodePicture = unsafe extern "system" fn(
+        encoder: *mut c_void,
+        params: *mut NV_ENC_PIC_PARAMS,
+    ) -> NVENCSTATUS;
 
-    pub type PFnNvEncLockBitstream = unsafe extern "C" fn(
+    pub type PFnNvEncLockBitstream = unsafe extern "system" fn(
         encoder: *mut c_void,
         params: *mut NV_ENC_LOCK_BITSTREAM,
     ) -> NVENCSTATUS;
 
     pub type PFnNvEncUnlockBitstream =
-        unsafe extern "C" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
+        unsafe extern "system" fn(encoder: *mut c_void, buffer: *mut c_void) -> NVENCSTATUS;
 
-    pub type PFnNvEncDestroyEncoder = unsafe extern "C" fn(encoder: *mut c_void) -> NVENCSTATUS;
+    pub type PFnNvEncDestroyEncoder =
+        unsafe extern "system" fn(encoder: *mut c_void) -> NVENCSTATUS;
 
     pub type PFnNvEncGetLastErrorString =
-        unsafe extern "C" fn(encoder: *mut c_void) -> *const std::ffi::c_char;
+        unsafe extern "system" fn(encoder: *mut c_void) -> *const std::ffi::c_char;
 
-    pub type PFnNvEncGetEncodePresetConfigEx = unsafe extern "C" fn(
+    pub type PFnNvEncGetEncodePresetConfigEx = unsafe extern "system" fn(
         encoder: *mut c_void,
         encode_guid: GUID,
         preset_guid: GUID,
@@ -902,9 +925,62 @@ pub(crate) mod ffi {
         }
     }
 
-    // Entry point
+    // Entry points
     pub type PFnNvEncodeAPICreateInstance =
-        unsafe extern "C" fn(function_list: *mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
+        unsafe extern "system" fn(function_list: *mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
+
+    pub type PFnNvEncodeAPIGetMaxSupportedVersion =
+        unsafe extern "system" fn(version: *mut u32) -> NVENCSTATUS;
+
+    /// Opens an NVENC encode session after validating driver version compatibility.
+    ///
+    /// Encapsulates the version check and session creation so it can be tested
+    /// with mock NVENC functions on any platform.
+    ///
+    /// # Safety
+    ///
+    /// `open_session_fn` must be a valid NVENC function pointer (or a safe mock).
+    /// `device_ptr` must be a valid device pointer for the given `device_type`.
+    ///
+    /// # Errors
+    ///
+    /// - [`VideoError::DriverVersionTooOld`] if `driver_max_version < nvencapi_max_version()`
+    /// - [`VideoError::EncodingFailed`] if the open-session call returns a non-success status
+    pub unsafe fn open_session(
+        driver_max_version: u32,
+        open_session_fn: PFnNvEncOpenEncodeSessionEx,
+        device_ptr: *mut c_void,
+        device_type: NV_ENC_DEVICE_TYPE,
+    ) -> Result<*mut c_void, crate::encoder::VideoError> {
+        if !is_driver_version_compatible(driver_max_version, nvencapi_max_version()) {
+            let (drv_maj, drv_min) = unpack_max_version(driver_max_version);
+            return Err(crate::encoder::VideoError::DriverVersionTooOld {
+                driver_version: format!("{drv_maj}.{drv_min}"),
+                sdk_version: format!("{NVENCAPI_MAJOR_VERSION}.{NVENCAPI_MINOR_VERSION}"),
+            });
+        }
+
+        let mut params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
+            device: device_ptr,
+            deviceType: device_type,
+            ..NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default()
+        };
+
+        let mut encoder: *mut c_void = std::ptr::null_mut();
+        let status = unsafe { open_session_fn(&raw mut params, &raw mut encoder) };
+
+        if status != NV_ENC_SUCCESS {
+            return Err(crate::encoder::VideoError::EncodingFailed {
+                reason: format!(
+                    "nvEncOpenEncodeSession failed: {} (status={})",
+                    nvenc_status_to_string(status),
+                    status
+                ),
+            });
+        }
+
+        Ok(encoder)
+    }
 
     /// Converts NVENC status code to human-readable string.
     pub fn nvenc_status_to_string(status: NVENCSTATUS) -> String {
@@ -1371,7 +1447,176 @@ pub(crate) mod ffi {
             );
         }
 
-        // ── E2E error-path test (proves the bug exists) ──
+        // ── FFI type sizes ──
+
+        #[test]
+        fn test_pfn_get_max_supported_version_size() {
+            assert_eq!(mem::size_of::<PFnNvEncodeAPIGetMaxSupportedVersion>(), PTR);
+        }
+
+        // ── Driver version helpers ──
+
+        #[test]
+        fn test_nvencapi_max_version_value() {
+            assert_eq!(nvencapi_max_version(), 0xC2);
+        }
+
+        #[test]
+        fn test_unpack_max_version_sdk_12_2() {
+            assert_eq!(unpack_max_version(0xC2), (12, 2));
+        }
+
+        #[test]
+        fn test_unpack_max_version_sdk_11_0() {
+            assert_eq!(unpack_max_version((11 << 4) | 0), (11, 0));
+        }
+
+        #[test]
+        fn test_is_driver_version_compatible_exact_match() {
+            assert!(is_driver_version_compatible(0xC2, 0xC2));
+        }
+
+        #[test]
+        fn test_is_driver_version_compatible_driver_newer() {
+            assert!(is_driver_version_compatible((12 << 4) | 3, 0xC2));
+        }
+
+        #[test]
+        fn test_is_driver_version_compatible_driver_older() {
+            assert!(!is_driver_version_compatible((11 << 4) | 0, 0xC2));
+        }
+
+        #[test]
+        fn test_is_driver_version_compatible_same_major_lower_minor() {
+            assert!(!is_driver_version_compatible((12 << 4) | 1, 0xC2));
+        }
+
+        // ── E2E tests with mock NVENC functions ──
+
+        /// Mock: always rejects session (simulates old driver).
+        unsafe extern "system" fn mock_open_session_reject(
+            _params: *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
+            _encoder: *mut *mut c_void,
+        ) -> NVENCSTATUS {
+            NV_ENC_ERR_INVALID_VERSION
+        }
+
+        /// Mock: validates version fields like a real SDK 12.2 driver, returns success.
+        unsafe extern "system" fn mock_open_session_validate(
+            params: *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
+            encoder: *mut *mut c_void,
+        ) -> NVENCSTATUS {
+            let p = unsafe { &*params };
+            if p.version != nvencapi_struct_version(1) {
+                return NV_ENC_ERR_INVALID_VERSION;
+            }
+            if p.apiVersion != NVENCAPI_VERSION {
+                return NV_ENC_ERR_INVALID_VERSION;
+            }
+            unsafe {
+                *encoder = 0xBEEF_CAFE as *mut c_void;
+            }
+            NV_ENC_SUCCESS
+        }
+
+        #[test]
+        fn test_e2e_old_driver_rejects_with_driver_version_too_old() {
+            let driver_max = (12 << 4) | 1; // 12.1 — too old for SDK 12.2
+            let result = unsafe {
+                open_session(
+                    driver_max,
+                    mock_open_session_reject, // should never be called
+                    0xDEAD as *mut c_void,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )
+            };
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::encoder::VideoError::DriverVersionTooOld { .. })
+                ),
+                "expected DriverVersionTooOld, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn test_e2e_compatible_driver_opens_session_successfully() {
+            let driver_max = (12 << 4) | 2; // 12.2 — exact match
+            let result = unsafe {
+                open_session(
+                    driver_max,
+                    mock_open_session_validate,
+                    0xDEAD as *mut c_void,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )
+            };
+            assert!(result.is_ok(), "expected Ok, got {result:?}");
+            assert_eq!(result.unwrap(), 0xBEEF_CAFE as *mut c_void);
+        }
+
+        #[test]
+        fn test_e2e_newer_driver_opens_session_successfully() {
+            let driver_max = (12 << 4) | 3; // 12.3 — newer than required
+            let result = unsafe {
+                open_session(
+                    driver_max,
+                    mock_open_session_validate,
+                    0xDEAD as *mut c_void,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )
+            };
+            assert!(result.is_ok(), "expected Ok, got {result:?}");
+        }
+
+        #[test]
+        fn test_e2e_session_params_have_correct_version_fields() {
+            /// Mock that captures and validates the version fields.
+            unsafe extern "system" fn mock_check_versions(
+                params: *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
+                encoder: *mut *mut c_void,
+            ) -> NVENCSTATUS {
+                let p = unsafe { &*params };
+                assert_eq!(p.version, 0x7201_000C, "struct version mismatch");
+                assert_eq!(p.apiVersion, 0x0200_000C, "API version mismatch");
+                unsafe {
+                    *encoder = 0xCAFE as *mut c_void;
+                }
+                NV_ENC_SUCCESS
+            }
+
+            let result = unsafe {
+                open_session(
+                    (12 << 4) | 2,
+                    mock_check_versions,
+                    0xDEAD as *mut c_void,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )
+            };
+            assert!(result.is_ok(), "expected Ok, got {result:?}");
+        }
+
+        #[test]
+        fn test_e2e_mock_driver_rejects_wrong_api_version() {
+            // Driver version is compatible but mock always rejects — tests error categorisation
+            let driver_max = (12 << 4) | 2;
+            let result = unsafe {
+                open_session(
+                    driver_max,
+                    mock_open_session_reject, // rejects regardless
+                    0xDEAD as *mut c_void,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )
+            };
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::encoder::VideoError::EncodingFailed { .. })
+                ),
+                "expected EncodingFailed, got {result:?}"
+            );
+        }
+
+        // ── Error-path tests ──
 
         #[test]
         fn nvenc_error_chain_reports_real_error_name() {

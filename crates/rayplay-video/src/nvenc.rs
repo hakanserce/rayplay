@@ -21,6 +21,7 @@
     clippy::cast_possible_truncation,
     clippy::field_reassign_with_default,
     clippy::borrow_as_ptr,
+    clippy::not_unsafe_ptr_arg_deref,
     clippy::similar_names,
     clippy::too_many_lines
 )]
@@ -43,12 +44,13 @@ mod windows {
             NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
             NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_H264_PROFILE_MAIN_GUID,
             NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS, NV_ENC_INPUT_RESOURCE_TYPE,
-            NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE, NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
-            NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS,
-            NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE,
-            NV_ENC_SUCCESS, NV_ENC_TUNING_INFO, NV_ENCODE_API_FUNCTION_LIST,
-            PFnNvEncodeAPICreateInstance, RC_FLAG_ENABLE_AQ, RC_FLAG_ZERO_REORDER_DELAY,
-            nvenc_status_to_string,
+            NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE, NV_ENC_PARAMS_RC_VBR,
+            NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS, NV_ENC_PIC_TYPE,
+            NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS,
+            NV_ENC_TUNING_INFO, NV_ENCODE_API_FUNCTION_LIST, NVENCAPI_MAJOR_VERSION,
+            NVENCAPI_MINOR_VERSION, PFnNvEncodeAPICreateInstance,
+            PFnNvEncodeAPIGetMaxSupportedVersion, RC_FLAG_ENABLE_AQ, RC_FLAG_ZERO_REORDER_DELAY,
+            nvenc_status_to_string, open_session, unpack_max_version,
         },
         packet::EncodedPacket,
     };
@@ -107,6 +109,41 @@ mod windows {
                 })?
             };
 
+            // Check driver supports our SDK version
+            let get_max_version_ptr = unsafe {
+                GetProcAddress(
+                    dll_handle,
+                    PCSTR(c"NvEncodeAPIGetMaxSupportedVersion".as_ptr().cast()),
+                )
+                .ok_or_else(|| VideoError::EncodingFailed {
+                    reason: "NvEncodeAPIGetMaxSupportedVersion not found in DLL".to_string(),
+                })?
+            };
+
+            let get_max_version: PFnNvEncodeAPIGetMaxSupportedVersion =
+                unsafe { mem::transmute(get_max_version_ptr) };
+
+            let mut driver_max_version: u32 = 0;
+            let status = unsafe { get_max_version(&mut driver_max_version) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "NvEncodeAPIGetMaxSupportedVersion failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
+                    ),
+                });
+            }
+
+            let (drv_major, drv_minor) = unpack_max_version(driver_max_version);
+            tracing::info!(
+                driver_major = drv_major,
+                driver_minor = drv_minor,
+                sdk_major = NVENCAPI_MAJOR_VERSION,
+                sdk_minor = NVENCAPI_MINOR_VERSION,
+                "NVENC driver version check"
+            );
+
             // Get API creation function
             let create_instance_ptr = unsafe {
                 GetProcAddress(
@@ -134,28 +171,21 @@ mod windows {
                 });
             }
 
-            // Open encoding session
-            let mut session_params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
-            session_params.device = device_ptr;
-            session_params.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
-
-            let mut encoder: *mut c_void = ptr::null_mut();
+            // Open encoding session (with version validation)
             let nvenc_open =
                 api.nvEncOpenEncodeSessionEx
                     .ok_or_else(|| VideoError::EncodingFailed {
                         reason: "nvEncOpenEncodeSessionEx function not available".to_string(),
                     })?;
 
-            let status = unsafe { nvenc_open(&mut session_params, &mut encoder) };
-            if status != NV_ENC_SUCCESS {
-                return Err(VideoError::EncodingFailed {
-                    reason: format!(
-                        "nvEncOpenEncodeSession failed: {} (status={})",
-                        nvenc_status_to_string(status),
-                        status
-                    ),
-                });
-            }
+            let encoder = unsafe {
+                open_session(
+                    driver_max_version,
+                    nvenc_open,
+                    device_ptr,
+                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                )?
+            };
 
             tracing::debug!("NVENC session opened successfully");
 
