@@ -101,18 +101,17 @@ pub(crate) mod ffi {
     #[repr(u32)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NV_ENC_BUFFER_FORMAT {
-        NV_ENC_BUFFER_FORMAT_UNDEFINED = 0,
-        NV_ENC_BUFFER_FORMAT_NV12 = 1,
-        NV_ENC_BUFFER_FORMAT_YV12 = 16,
-        NV_ENC_BUFFER_FORMAT_IYUV = 256,
-        NV_ENC_BUFFER_FORMAT_YUV444 = 4,
-        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 16777216,
-        NV_ENC_BUFFER_FORMAT_YUV444_10BIT = 16777220,
-        NV_ENC_BUFFER_FORMAT_ARGB = 0x20,
-        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x40,
-        NV_ENC_BUFFER_FORMAT_AYUV = 0x80,
-        NV_ENC_BUFFER_FORMAT_ABGR = 0x100,
-        NV_ENC_BUFFER_FORMAT_ABGR10 = 0x200,
+        NV_ENC_BUFFER_FORMAT_UNDEFINED = 0x0000_0000,
+        NV_ENC_BUFFER_FORMAT_NV12 = 0x0000_0001,
+        NV_ENC_BUFFER_FORMAT_YV12 = 0x0000_0010,
+        NV_ENC_BUFFER_FORMAT_IYUV = 0x0000_0100,
+        NV_ENC_BUFFER_FORMAT_YUV444 = 0x0000_1000,
+        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 0x0100_0000,
+        NV_ENC_BUFFER_FORMAT_ARGB = 0x0200_0000,
+        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x0400_0000,
+        NV_ENC_BUFFER_FORMAT_AYUV = 0x0800_0000,
+        NV_ENC_BUFFER_FORMAT_ABGR = 0x1000_0000,
+        NV_ENC_BUFFER_FORMAT_ABGR10 = 0x2000_0000,
     }
 
     #[repr(u32)]
@@ -334,6 +333,7 @@ pub(crate) mod ffi {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct NV_ENC_CONFIG_H264 {
         pub enableTemporalSVC: u32,
         pub enableStereoMVC: u32,
@@ -356,7 +356,15 @@ pub(crate) mod ffi {
         pub reserved2: [*mut c_void; 64],
     }
 
+    impl Default for NV_ENC_CONFIG_H264 {
+        fn default() -> Self {
+            // SAFETY: All fields are primitive types and raw pointers — zero is valid.
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
     #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct NV_ENC_CONFIG_HEVC {
         pub level: u32,
         pub tier: u32,
@@ -377,6 +385,13 @@ pub(crate) mod ffi {
         pub enableConstrainedEncoding: u32,
         pub reserved: [u32; 15],
         pub reserved1: [*mut c_void; 64],
+    }
+
+    impl Default for NV_ENC_CONFIG_HEVC {
+        fn default() -> Self {
+            // SAFETY: All fields are primitive types and raw pointers — zero is valid.
+            unsafe { std::mem::zeroed() }
+        }
     }
 
     impl Default for NV_ENC_CONFIG {
@@ -575,6 +590,7 @@ pub(crate) mod ffi {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct NV_ENC_PIC_PARAMS_H264 {
         pub displayPOCSyntax: u32,
         pub reserved3: u32,
@@ -593,6 +609,7 @@ pub(crate) mod ffi {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct NV_ENC_PIC_PARAMS_HEVC {
         pub displayPOCSyntax: u32,
         pub refPicFlag: u32,

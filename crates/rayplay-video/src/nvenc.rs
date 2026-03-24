@@ -18,16 +18,11 @@
 /// ```
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::{
-        collections::HashMap,
-        ffi::{CString, c_void},
-        mem,
-        ptr::{self, NonNull},
-    };
+    use std::{collections::HashMap, ffi::c_void, mem, ptr};
 
     use windows::{
         Win32::{
-            Foundation::{BOOL, HMODULE},
+            Foundation::HMODULE,
             System::LibraryLoader::{GetProcAddress, LoadLibraryA},
         },
         core::PCSTR,
@@ -36,15 +31,15 @@ mod windows {
     use crate::{
         encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         nvenc_sys::{
-            GUID, NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_CONFIG, NV_ENC_CODEC_H264_GUID,
-            NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
-            NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_ENCODE_API_FUNCTION_LIST,
-            NV_ENC_H264_PROFILE_MAIN_GUID, NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS,
-            NV_ENC_INPUT_RESOURCE_TYPE, NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE,
-            NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS, NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS,
-            NV_ENC_PIC_PARAMS, NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID,
-            NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS, NV_ENC_TUNING_INFO, NVENCSTATUS,
-            NvEncodeAPICreateInstance, PFnNvEncodeAPICreateInstance, nvenc_status_to_string,
+            NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_CONFIG, NV_ENC_CODEC_H264_GUID,
+            NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
+            NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_H264_PROFILE_MAIN_GUID,
+            NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS, NV_ENC_INPUT_RESOURCE_TYPE,
+            NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE, NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
+            NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS,
+            NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE,
+            NV_ENC_SUCCESS, NV_ENC_TUNING_INFO, NV_ENCODE_API_FUNCTION_LIST,
+            PFnNvEncodeAPICreateInstance, nvenc_status_to_string,
         },
         packet::EncodedPacket,
     };
@@ -60,7 +55,7 @@ mod windows {
     /// must own its own session.
     pub struct NvencEncoder {
         config: EncoderConfig,
-        api: NV_ENC_ENCODE_API_FUNCTION_LIST,
+        api: NV_ENCODE_API_FUNCTION_LIST,
         encoder: *mut c_void,
         output_buffers: Vec<*mut c_void>,
         registered_resources: HashMap<*mut c_void, *mut c_void>,
@@ -115,7 +110,7 @@ mod windows {
                 unsafe { mem::transmute(create_instance_ptr) };
 
             // Create API function list
-            let mut api = NV_ENC_ENCODE_API_FUNCTION_LIST::default();
+            let mut api = NV_ENCODE_API_FUNCTION_LIST::default();
             let status = unsafe { create_instance(&mut api) };
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
@@ -413,9 +408,9 @@ mod windows {
             pic_params.inputDuration = 0;
             pic_params.frameIdx = self.frame_index as u32;
 
-            // Force keyframes every GOP length
+            // Force IDR keyframes every GOP length
             if self.frame_index % 60 == 0 {
-                pic_params.encodePicFlags = NV_ENC_PIC_FLAG_EOS; // This should be FORCEIDR but using EOS for now
+                pic_params.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
             }
 
             // Encode the picture
