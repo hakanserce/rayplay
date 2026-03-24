@@ -29,9 +29,19 @@ args = ["test", "--workspace"]
 # ─── Linting & Formatting ──────────────────────────────────────────────────────
 
 [tasks.lint]
+description = "Run clippy with pedantic warnings"
+dependencies = ["lint-all-targets-with-deps", "lint-all-features-with-no-deps"]
+
+[tasks.lint-all-targets-with-deps]
 description = "Run clippy with pedantic warnings across all crates"
 command = "cargo"
 args = ["clippy", "--all-targets", "--workspace", "--", "-D", "warnings", "-W", "clippy::pedantic"]
+
+[tasks.lint-all-features-with-no-deps]
+description = "Run clippy with pedantic warnings across all crates with no-deps"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--no-deps", "--workspace", "--", "-D", "warnings", "-W", "clippy::pedantic"]
+
 
 [tasks.fmt]
 description = "Check formatting across all crates"
