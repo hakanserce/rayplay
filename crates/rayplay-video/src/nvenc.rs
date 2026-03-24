@@ -127,8 +127,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "NvEncodeAPICreateInstance failed: {}",
-                        nvenc_status_to_string(status)
+                        "NvEncodeAPICreateInstance failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -149,8 +150,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncOpenEncodeSession failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncOpenEncodeSession failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -182,8 +184,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncGetEncodePresetConfigEx failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncGetEncodePresetConfigEx failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -244,8 +247,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncInitializeEncoder failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncInitializeEncoder failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -268,9 +272,10 @@ mod windows {
                 if status != NV_ENC_SUCCESS {
                     return Err(VideoError::EncodingFailed {
                         reason: format!(
-                            "nvEncCreateBitstreamBuffer {} failed: {}",
+                            "nvEncCreateBitstreamBuffer {} failed: {} (status={})",
                             i,
-                            nvenc_status_to_string(status)
+                            nvenc_status_to_string(status),
+                            status
                         ),
                     });
                 }
@@ -322,8 +327,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncRegisterResource failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncRegisterResource failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -366,8 +372,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncMapInputResource failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncMapInputResource failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -388,8 +395,9 @@ mod windows {
             let status = unsafe { nvenc_unmap(self.encoder, mapped_resource) };
             if status != NV_ENC_SUCCESS {
                 tracing::warn!(
-                    "nvEncUnmapInputResource failed: {}",
-                    nvenc_status_to_string(status)
+                    "nvEncUnmapInputResource failed: {} (status={})",
+                    nvenc_status_to_string(status),
+                    status
                 );
             }
 
@@ -430,8 +438,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncEncodePicture failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncEncodePicture failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -465,8 +474,9 @@ mod windows {
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
                     reason: format!(
-                        "nvEncLockBitstream failed: {}",
-                        nvenc_status_to_string(status)
+                        "nvEncLockBitstream failed: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     ),
                 });
             }
@@ -521,8 +531,9 @@ mod windows {
             let status = unsafe { nvenc_unlock(self.encoder, lock_params.outputBitstream) };
             if status != NV_ENC_SUCCESS {
                 tracing::warn!(
-                    "nvEncUnlockBitstream failed: {}",
-                    nvenc_status_to_string(status)
+                    "nvEncUnlockBitstream failed: {} (status={})",
+                    nvenc_status_to_string(status),
+                    status
                 );
             }
 
@@ -586,8 +597,9 @@ mod windows {
             let status = unsafe { nvenc_encode(self.encoder, &mut pic_params) };
             if status != NV_ENC_SUCCESS {
                 tracing::warn!(
-                    "EOS frame encoding failed: {}",
-                    nvenc_status_to_string(status)
+                    "EOS frame encoding failed: {} (status={})",
+                    nvenc_status_to_string(status),
+                    status
                 );
                 return Ok(vec![]);
             }
@@ -622,9 +634,10 @@ mod windows {
                     let status = unsafe { nvenc_unregister(self.encoder, *registered_ptr) };
                     if status != NV_ENC_SUCCESS {
                         tracing::warn!(
-                            "Failed to unregister texture {:p}: {}",
+                            "Failed to unregister texture {:p}: {} (status={})",
                             texture_ptr,
-                            nvenc_status_to_string(status)
+                            nvenc_status_to_string(status),
+                            status
                         );
                     }
                 }
@@ -636,9 +649,10 @@ mod windows {
                     let status = unsafe { nvenc_destroy_bitstream(self.encoder, *buffer) };
                     if status != NV_ENC_SUCCESS {
                         tracing::warn!(
-                            "Failed to destroy output buffer {}: {}",
+                            "Failed to destroy output buffer {}: {} (status={})",
                             i,
-                            nvenc_status_to_string(status)
+                            nvenc_status_to_string(status),
+                            status
                         );
                     }
                 }
@@ -649,8 +663,9 @@ mod windows {
                 let status = unsafe { nvenc_destroy(self.encoder) };
                 if status != NV_ENC_SUCCESS {
                     tracing::warn!(
-                        "Failed to destroy encoder: {}",
-                        nvenc_status_to_string(status)
+                        "Failed to destroy encoder: {} (status={})",
+                        nvenc_status_to_string(status),
+                        status
                     );
                 }
             }
