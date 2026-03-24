@@ -1023,3 +1023,127 @@ fn test_e2e_register_resource_default_params_succeed() {
         status
     );
 }
+
+// ── Preset config zero-initialization (matches FFmpeg / NVIDIA samples) ──
+//
+// The SDK requires NV_ENC_PRESET_CONFIG to be zero-initialized before calling
+// nvEncGetEncodePresetConfigEx. Only the version fields should be set.
+// Non-zero values in output fields (gopLength, frameIntervalP, rcParams, etc.)
+// cause the real driver to return NV_ENC_ERR_INVALID_PARAM.
+
+#[test]
+fn preset_config_default_inner_cfg_only_has_version_set() {
+    let pc = NV_ENC_PRESET_CONFIG::default();
+
+    // Outer version must be set
+    assert_eq!(pc.version, nvencapi_struct_version_high(5));
+
+    // Inner presetCfg.version must be set
+    assert_eq!(pc.presetCfg.version, nvencapi_struct_version_high(9));
+
+    // All other fields in presetCfg must be zero (they are [out] parameters
+    // filled by the driver). Non-zero values cause NV_ENC_ERR_INVALID_PARAM.
+    assert_eq!(
+        pc.presetCfg.gopLength, 0,
+        "presetCfg.gopLength must be 0 before query (it's an [out] field)"
+    );
+    assert_eq!(
+        pc.presetCfg.frameIntervalP, 0,
+        "presetCfg.frameIntervalP must be 0 before query (it's an [out] field)"
+    );
+    assert_eq!(
+        pc.presetCfg.rcParams.rateControlMode, 0,
+        "presetCfg.rcParams.rateControlMode must be 0 before query"
+    );
+    // rcParams.version should also be 0 — it's part of the output struct
+    assert_eq!(
+        pc.presetCfg.rcParams.version, 0,
+        "presetCfg.rcParams.version must be 0 before query"
+    );
+}
+
+/// Strict mock that rejects non-zero output fields, matching real driver behavior.
+unsafe extern "system" fn mock_preset_config_strict(
+    _encoder: *mut c_void,
+    encode_guid: GUID,
+    preset_guid: GUID,
+    tuning_info: NV_ENC_TUNING_INFO,
+    preset_config: *mut NV_ENC_PRESET_CONFIG,
+) -> NVENCSTATUS {
+    let pc = unsafe { &*preset_config };
+
+    // Check versions
+    if pc.version != nvencapi_struct_version_high(5) {
+        return NV_ENC_ERR_INVALID_VERSION;
+    }
+    if pc.presetCfg.version != nvencapi_struct_version_high(9) {
+        return NV_ENC_ERR_INVALID_VERSION;
+    }
+
+    // Reject non-zero output fields (real driver behavior)
+    if pc.presetCfg.gopLength != 0
+        || pc.presetCfg.frameIntervalP != 0
+        || pc.presetCfg.rcParams.rateControlMode != 0
+        || pc.presetCfg.rcParams.version != 0
+    {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+
+    // Validate input params
+    if encode_guid != NV_ENC_CODEC_HEVC_GUID && encode_guid != NV_ENC_CODEC_H264_GUID {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+    if preset_guid != NV_ENC_PRESET_P1_GUID {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+    if tuning_info == NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_UNDEFINED {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+
+    // Fill in the preset config like a real driver would
+    let pc = unsafe { &mut *preset_config };
+    pc.presetCfg.gopLength = 120;
+    pc.presetCfg.frameIntervalP = 1;
+    pc.presetCfg.rcParams.version = nvencapi_struct_version(1);
+    pc.presetCfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+    pc.presetCfg.rcParams.averageBitRate = 10_000_000;
+    pc.presetCfg.rcParams.maxBitRate = 20_000_000;
+
+    // Set codec-specific defaults like a real driver would
+    if encode_guid == NV_ENC_CODEC_HEVC_GUID {
+        let hevc = unsafe { &mut pc.presetCfg.encodeCodecConfig.hevcConfig };
+        hevc.idrPeriod = 120;
+        hevc.maxNumRefFramesInDPB = 4;
+    } else {
+        let h264 = unsafe { &mut pc.presetCfg.encodeCodecConfig.h264Config };
+        h264.idrPeriod = 120;
+        h264.maxNumRefFrames = 4;
+    }
+
+    NV_ENC_SUCCESS
+}
+
+#[test]
+fn test_e2e_strict_mock_accepts_zero_init_preset_config() {
+    let mut preset_config = NV_ENC_PRESET_CONFIG::default();
+    let status = unsafe {
+        mock_preset_config_strict(
+            0xBEEF as *mut c_void,
+            NV_ENC_CODEC_HEVC_GUID,
+            NV_ENC_PRESET_P1_GUID,
+            NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+            &raw mut preset_config,
+        )
+    };
+    assert_eq!(
+        status,
+        NV_ENC_SUCCESS,
+        "zero-init preset config should succeed, got {} (status={})",
+        nvenc_status_to_string(status),
+        status
+    );
+
+    // Verify the mock filled in the preset config
+    assert_eq!(preset_config.presetCfg.gopLength, 120);
+    assert_eq!(preset_config.presetCfg.frameIntervalP, 1);
+}
