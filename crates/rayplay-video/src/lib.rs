@@ -56,7 +56,7 @@ pub mod ffmpeg_enc;
 pub mod d3d11_device;
 #[cfg(target_os = "windows")]
 pub mod dxgi_capture;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 mod nvenc_sys;
 
 pub use capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};

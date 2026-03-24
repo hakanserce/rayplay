@@ -138,9 +138,9 @@ mod windows {
 
             let mut encoder: *mut c_void = ptr::null_mut();
             let nvenc_open =
-                api.nvEncOpenEncodeSession
+                api.nvEncOpenEncodeSessionEx
                     .ok_or_else(|| VideoError::EncodingFailed {
-                        reason: "nvEncOpenEncodeSession function not available".to_string(),
+                        reason: "nvEncOpenEncodeSessionEx function not available".to_string(),
                     })?;
 
             let status = unsafe { nvenc_open(&mut session_params, &mut encoder) };
