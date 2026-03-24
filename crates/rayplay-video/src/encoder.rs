@@ -205,6 +205,14 @@ pub enum VideoError {
     #[error("corrupt packet: {reason}")]
     CorruptPacket { reason: String },
 
+    #[error(
+        "NVIDIA driver too old: supports NVENC {driver_version} but SDK requires {sdk_version} — update GPU driver"
+    )]
+    DriverVersionTooOld {
+        driver_version: String,
+        sdk_version: String,
+    },
+
     #[error("video encoding is not supported on this platform")]
     UnsupportedPlatform,
 }

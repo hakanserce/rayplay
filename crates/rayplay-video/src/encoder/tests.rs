@@ -207,6 +207,18 @@ fn test_video_error_corrupt_packet_message() {
     assert!(msg.contains("truncated NAL"));
 }
 
+#[test]
+fn test_driver_version_too_old_error_display() {
+    let msg = VideoError::DriverVersionTooOld {
+        driver_version: "11.0".to_string(),
+        sdk_version: "12.2".to_string(),
+    }
+    .to_string();
+    assert!(msg.contains("11.0"), "should contain driver version");
+    assert!(msg.contains("12.2"), "should contain SDK version");
+    assert!(msg.contains("update"), "should suggest updating driver");
+}
+
 // ── compute_auto_bitrate (private, tested via Bitrate::Auto) ──────────────
 
 #[test]
