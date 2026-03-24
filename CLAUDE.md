@@ -94,7 +94,7 @@ Worktrees inherit this setting automatically.
 
 ## Quality Gates (MUST pass before every commit)
 
-Run `cargo make lint-test-coverage`. If it exits 0, all gates pass:
+Run `cargo make ci`. If it exits 0, all gates pass:
 - clippy --pedantic (zero warnings)
 - all tests pass
 - code coverage ≥99% (with platform exclusions applied)

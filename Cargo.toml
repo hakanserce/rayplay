@@ -2,6 +2,16 @@
 members = ["crates/*"]
 resolver = "3"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Hakan Serce"]
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/hakanserce/rayplay"
+homepage = "https://github.com/hakanserce/rayplay"
+keywords = ["game-streaming", "nvenc", "low-latency", "video", "input"]
+categories = ["multimedia::video", "network-programming", "games"]
+
 
 # Shared dependency versions — crates inherit from here
 [workspace.dependencies]
