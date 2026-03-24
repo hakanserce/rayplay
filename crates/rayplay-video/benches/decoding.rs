@@ -41,7 +41,7 @@ fn bench_encoded_packet_construction(c: &mut Criterion) {
     ] {
         group.throughput(Throughput::Bytes(packet_bytes as u64));
         group.bench_with_input(BenchmarkId::new("new", label), &packet_bytes, |b, &size| {
-            b.iter(|| black_box(make_encoded_packet(size, false)))
+            b.iter(|| black_box(make_encoded_packet(size, false)));
         });
     }
 
@@ -57,7 +57,7 @@ fn bench_decoded_frame_cpu_alloc(c: &mut Criterion) {
         let pixels = (w as usize) * (h as usize) * 4;
         group.throughput(Throughput::Bytes(pixels as u64));
         group.bench_with_input(BenchmarkId::new("new_cpu", label), &(w, h), |b, &(w, h)| {
-            b.iter(|| black_box(make_decoded_frame_cpu(w, h)))
+            b.iter(|| black_box(make_decoded_frame_cpu(w, h)));
         });
     }
 
@@ -80,7 +80,7 @@ fn bench_expected_data_size(c: &mut Criterion) {
             &(w, h, fmt),
             |b, (w, h, fmt)| {
                 let frame = DecodedFrame::new_cpu(vec![], *w, *h, *w * 4, fmt.clone(), 0);
-                b.iter(|| black_box(frame.expected_data_size()))
+                b.iter(|| black_box(frame.expected_data_size()));
             },
         );
     }

@@ -221,7 +221,7 @@ fn test_flag_keyframe_is_bit_zero() {
 #[test]
 fn test_transport_error_datagram_too_short_display() {
     let e = TransportError::DatagramTooShort(5);
-    assert!(e.to_string().contains("5"));
+    assert!(e.to_string().contains('5'));
 }
 
 #[test]

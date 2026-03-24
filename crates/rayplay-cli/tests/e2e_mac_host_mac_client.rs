@@ -1,8 +1,8 @@
 //! End-to-end integration test: macOS host → macOS client simulation.
 //!
-//! Simulates a Mac host capturing at retina resolution via ScreenCaptureKit,
+//! Simulates a Mac host capturing at retina resolution via `ScreenCaptureKit`,
 //! encoding with software H.264 (standing in for the real SCK + encoder),
-//! and sending to a Mac client decoding with VideoToolbox (VtDecoder).
+//! and sending to a Mac client decoding with `VideoToolbox` (`VtDecoder`).
 //!
 //! Requires macOS hardware and the `hw-codec-tests` feature flag.
 #![cfg(all(target_os = "macos", feature = "hw-codec-tests"))]

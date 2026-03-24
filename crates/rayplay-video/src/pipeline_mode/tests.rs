@@ -14,7 +14,7 @@ fn test_debug_format() {
 #[test]
 fn test_clone_and_copy() {
     let mode = PipelineMode::Software;
-    let cloned = mode.clone();
+    let cloned = mode;
     let copied = mode;
 
     assert_eq!(mode, cloned);

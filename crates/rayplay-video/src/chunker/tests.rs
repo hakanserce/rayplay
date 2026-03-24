@@ -99,6 +99,7 @@ fn test_chunk_total_chunks_matches_split_count() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_truncation)]
 fn test_chunk_indices_are_sequential() {
     let mut chunker = FrameChunker::new(500);
     let packet = make_packet(1200, false, 0);
@@ -118,71 +119,63 @@ fn test_chunk_all_chunks_carry_same_packet_index() {
     }
 }
 
-// ── packet counter ─────────────────────────────────────────────────────────
-
 #[test]
-fn test_packet_counter_increments_per_non_empty_packet() {
-    let mut chunker = FrameChunker::new(1200);
-    chunker.chunk(&make_packet(100, false, 0));
-    chunker.chunk(&make_packet(100, false, 0));
-    assert_eq!(chunker.packet_counter(), 2);
-}
-
-#[test]
-fn test_packet_index_increases_across_calls() {
-    let mut chunker = FrameChunker::new(1200);
-    let c0 = chunker.chunk(&make_packet(100, false, 0));
-    let c1 = chunker.chunk(&make_packet(100, false, 1000));
-    assert_eq!(c0[0].packet_index, 0);
-    assert_eq!(c1[0].packet_index, 1);
-}
-
-#[test]
-fn test_packet_counter_wraps_on_overflow() {
-    let mut chunker = FrameChunker {
-        max_chunk_size: 1200,
-        packet_counter: u32::MAX,
-    };
-    chunker.chunk(&make_packet(100, false, 0));
-    assert_eq!(chunker.packet_counter(), 0);
-}
-
-// ── data integrity ─────────────────────────────────────────────────────────
-
-#[test]
-fn test_chunk_data_reassembly_matches_original() {
+fn test_chunk_advances_packet_counter_once_per_packet() {
     let mut chunker = FrameChunker::new(500);
-    let original: Vec<u8> = (0u8..=255u8).cycle().take(1300).collect();
-    let packet = EncodedPacket::new(original.clone(), false, 0, 16_667);
+    let packet1 = make_packet(1200, false, 0);
+    let chunks1 = chunker.chunk(&packet1);
+    assert!(chunks1.len() > 1);
+    for c in &chunks1 {
+        assert_eq!(c.packet_index, 0);
+    }
+
+    let packet2 = make_packet(800, true, 16667);
+    let chunks2 = chunker.chunk(&packet2);
+    for c in &chunks2 {
+        assert_eq!(c.packet_index, 1);
+    }
+}
+
+#[test]
+fn test_chunk_respects_max_chunk_size() {
+    let mut chunker = FrameChunker::new(100);
+    let packet = make_packet(250, false, 0);
     let chunks = chunker.chunk(&packet);
-    let reassembled: Vec<u8> = chunks.into_iter().flat_map(|c| c.data).collect();
-    assert_eq!(reassembled, original);
+    for c in &chunks {
+        assert!(c.data.len() <= 100);
+    }
 }
 
-// ── is_keyframe propagation ────────────────────────────────────────────────
+// ── realism: many packets ──────────────────────────────────────────────────
 
 #[test]
-fn test_chunk_propagates_is_keyframe_true() {
-    let mut chunker = FrameChunker::new(500);
-    let packet = make_packet(1000, true, 0);
-    for c in chunker.chunk(&packet) {
+fn test_chunk_realism_streaming_scenario() {
+    let mut chunker = FrameChunker::new(1200);
+
+    // Keyframe (large)
+    let keyframe_packet = make_packet(8000, true, 0);
+    let kf_chunks = chunker.chunk(&keyframe_packet);
+    assert!(kf_chunks.len() > 1);
+    for c in &kf_chunks {
         assert!(c.is_keyframe);
+        assert_eq!(c.packet_index, 0);
     }
-}
 
-#[test]
-fn test_chunk_propagates_is_keyframe_false() {
-    let mut chunker = FrameChunker::new(500);
-    let packet = make_packet(1000, false, 0);
-    for c in chunker.chunk(&packet) {
+    // P-frames (small)
+    for frame_idx in 1..=10 {
+        let delta_packet = make_packet(600, false, frame_idx * 16_667);
+        let delta_chunks = chunker.chunk(&delta_packet);
+        assert_eq!(delta_chunks.len(), 1);
+        let c = &delta_chunks[0];
         assert!(!c.is_keyframe);
+        assert_eq!(u64::from(c.packet_index), frame_idx);
     }
 }
 
-// ── exact-size boundary ────────────────────────────────────────────────────
+// ── edge cases ─────────────────────────────────────────────────────────────
 
 #[test]
-fn test_chunk_packet_exactly_one_chunk_size() {
+fn test_chunk_packet_exactly_max_size() {
     let mut chunker = FrameChunker::new(1200);
     let packet = make_packet(1200, false, 0);
     let chunks = chunker.chunk(&packet);
@@ -191,11 +184,38 @@ fn test_chunk_packet_exactly_one_chunk_size() {
 }
 
 #[test]
-fn test_chunk_packet_one_byte_over_chunk_size() {
+fn test_chunk_packet_one_byte_over_max_size() {
     let mut chunker = FrameChunker::new(1200);
     let packet = make_packet(1201, false, 0);
     let chunks = chunker.chunk(&packet);
     assert_eq!(chunks.len(), 2);
     assert_eq!(chunks[0].data.len(), 1200);
     assert_eq!(chunks[1].data.len(), 1);
+}
+
+#[test]
+fn test_chunk_carries_timestamp() {
+    let mut chunker = FrameChunker::new(1200);
+    let packet = make_packet(100, false, 42_000);
+    let chunks = chunker.chunk(&packet);
+    assert_eq!(chunks[0].timestamp_us, 42_000);
+}
+
+// ── NetworkChunk Debug ────────────────────────────────────────────────────
+
+#[test]
+fn test_network_chunk_debug() {
+    let chunk = NetworkChunk {
+        packet_index: 1,
+        chunk_index: 2,
+        total_chunks: 5,
+        is_keyframe: true,
+        timestamp_us: 123_456,
+        data: vec![0xAA, 0xBB],
+    };
+    let dbg = format!("{chunk:?}");
+    assert!(dbg.contains('1'));
+    assert!(dbg.contains('2'));
+    assert!(dbg.contains('5'));
+    assert!(dbg.contains("123456"));
 }

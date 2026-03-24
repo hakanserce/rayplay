@@ -1177,6 +1177,7 @@ pub(crate) mod ffi {
         // ── Struct configuration API (mirrors how nvenc.rs should use them) ──
 
         #[test]
+        #[allow(clippy::field_reassign_with_default)]
         fn configure_rc_params_via_bitflags() {
             let mut rc = NV_ENC_RC_PARAMS::default();
             rc.rateControlMode = NV_ENC_PARAMS_RC_VBR;
@@ -1192,6 +1193,7 @@ pub(crate) mod ffi {
         }
 
         #[test]
+        #[allow(clippy::field_reassign_with_default)]
         fn configure_hevc_config_via_bitflags() {
             let mut hevc = NV_ENC_CONFIG_HEVC::default();
             hevc.hevc_flags = HEVC_FLAG_REPEAT_SPS_PPS | (1 << HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT); // chromaFormatIDC = 1 (YUV420)
@@ -1200,6 +1202,7 @@ pub(crate) mod ffi {
         }
 
         #[test]
+        #[allow(clippy::field_reassign_with_default)]
         fn configure_h264_config_via_bitflags() {
             let mut h264 = NV_ENC_CONFIG_H264::default();
             h264.h264_flags = H264_FLAG_REPEAT_SPS_PPS;
@@ -1208,6 +1211,7 @@ pub(crate) mod ffi {
         }
 
         #[test]
+        #[allow(clippy::field_reassign_with_default)]
         fn configure_init_params_with_tuning_info() {
             let mut params = NV_ENC_INITIALIZE_PARAMS::default();
             params.encodeGUID = NV_ENC_CODEC_HEVC_GUID;
@@ -1467,6 +1471,7 @@ pub(crate) mod ffi {
         }
 
         #[test]
+        #[allow(clippy::identity_op)]
         fn test_unpack_max_version_sdk_11_0() {
             assert_eq!(unpack_max_version((11 << 4) | 0), (11, 0));
         }
@@ -1482,6 +1487,7 @@ pub(crate) mod ffi {
         }
 
         #[test]
+        #[allow(clippy::identity_op)]
         fn test_is_driver_version_compatible_driver_older() {
             assert!(!is_driver_version_compatible((11 << 4) | 0, 0xC2));
         }
@@ -1644,10 +1650,8 @@ pub(crate) mod ffi {
                     "code {code}: expected '{expected_name}', got '{status_str}'"
                 );
                 // Simulate the format! pattern from nvenc.rs line 151-154
-                let error_msg = format!(
-                    "nvEncOpenEncodeSession failed: {} (status={})",
-                    status_str, code
-                );
+                let error_msg =
+                    format!("nvEncOpenEncodeSession failed: {status_str} (status={code})");
                 assert!(
                     error_msg.contains(expected_name),
                     "error msg missing name for code {code}"

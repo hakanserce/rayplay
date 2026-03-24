@@ -1,7 +1,7 @@
 //! End-to-end integration test: Windows host → macOS client simulation.
 //!
-//! Simulates a Windows host sending H.264 encoded frames (via OpenH264, standing
-//! in for NVENC) to a macOS client decoding with VideoToolbox (VtDecoder).
+//! Simulates a Windows host sending H.264 encoded frames (via `OpenH264`, standing
+//! in for NVENC) to a macOS client decoding with `VideoToolbox` (`VtDecoder`).
 //!
 //! Requires macOS hardware and the `hw-codec-tests` feature flag.
 #![cfg(all(target_os = "macos", feature = "hw-codec-tests"))]

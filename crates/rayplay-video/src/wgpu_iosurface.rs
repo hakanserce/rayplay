@@ -255,8 +255,8 @@ mod tests {
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
-                &raw const kCFTypeDictionaryKeyCallBacks as *const c_void,
-                &raw const kCFTypeDictionaryValueCallBacks as *const c_void,
+                (&raw const kCFTypeDictionaryKeyCallBacks).cast::<c_void>(),
+                (&raw const kCFTypeDictionaryValueCallBacks).cast::<c_void>(),
             )
         };
         // Attributes dict: { IOSurfaceProperties → {} }
@@ -265,11 +265,11 @@ mod tests {
         let attrs = unsafe {
             CFDictionaryCreate(
                 std::ptr::null(),
-                &raw const attr_key as *const *const c_void,
-                &raw const attr_val as *const *const c_void,
+                (&raw const attr_key).cast::<*const c_void>(),
+                (&raw const attr_val).cast::<*const c_void>(),
                 1,
-                &raw const kCFTypeDictionaryKeyCallBacks as *const c_void,
-                &raw const kCFTypeDictionaryValueCallBacks as *const c_void,
+                (&raw const kCFTypeDictionaryKeyCallBacks).cast::<c_void>(),
+                (&raw const kCFTypeDictionaryValueCallBacks).cast::<c_void>(),
             )
         };
         // kCVPixelFormatType_420YpCbCr8BiPlanarFullRange = 875704438

@@ -35,7 +35,7 @@ fn empty_trust_db() -> std::sync::Arc<tokio::sync::Mutex<TrustDatabase>> {
     std::sync::Arc::new(tokio::sync::Mutex::new(TrustDatabase::new()))
 }
 
-/// Handler that succeeds immediately — used where the on_connect callback
+/// Handler that succeeds immediately — used where the `on_connect` callback
 /// must be callable and covered, and also passed (but never called) in
 /// shutdown-before-connect tests so a single function body covers all cases.
 async fn noop_handler(_: QuicVideoTransport, _: CancellationToken) -> Result<()> {
@@ -477,8 +477,8 @@ fn test_drive_encode_loop_exits_on_closed_channel_via_timeout() {
 
 /// Covers `CaptureError::Timeout` when the channel is still open: first call returns
 /// `Timeout` (so the loop checks `is_closed()` — false — continues with another
-/// open, so is_closed() is false → `continue`) then returns `AcquireFailed`
-/// (so drive_encode_loop sends an error and exits deterministically).
+/// open, so `is_closed()` is false → `continue`) then returns `AcquireFailed`
+/// (so `drive_encode_loop` sends an error and exits deterministically).
 #[test]
 fn test_drive_encode_loop_timeout_continues_when_channel_open() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<EncodedPacket>>(4);
@@ -683,7 +683,7 @@ async fn test_layer1_quic_server_sends_three_packets_to_client() {
 
     let server_task = tokio::spawn(async move {
         let mut transport = listener.accept().await.unwrap();
-        for i in 1u8..=N as u8 {
+        for i in 1..=u8::try_from(N).unwrap() {
             let pkt = EncodedPacket::new(vec![i], i == 1, 0, 16_667);
             transport.send_video(&pkt).await.unwrap();
             tokio::task::yield_now().await;
@@ -691,7 +691,7 @@ async fn test_layer1_quic_server_sends_three_packets_to_client() {
     });
 
     let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
-    for i in 1u8..=N as u8 {
+    for i in 1..=u8::try_from(N).unwrap() {
         let pkt = client.recv_video().await.expect("receive packet");
         assert_eq!(pkt.data, vec![i]);
     }
@@ -713,7 +713,7 @@ async fn test_layer2_encode_thread_delivers_n_packets_to_channel() {
         drive_encode_loop(capturer, encoder, tx, session_start);
     });
 
-    for i in 1u8..=N as u8 {
+    for i in 1..=u8::try_from(N).unwrap() {
         let pkt = rx
             .recv()
             .await
@@ -751,7 +751,7 @@ async fn test_layer3_encode_to_quic_delivers_n_packets() {
     });
 
     let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
-    for i in 1u8..=N as u8 {
+    for i in 1..=u8::try_from(N).unwrap() {
         let pkt = client.recv_video().await.expect("receive packet");
         assert_eq!(pkt.data, vec![i]);
     }
@@ -827,7 +827,7 @@ async fn test_layer4_stream_with_pipeline_three_frames_received_in_order() {
     });
 
     let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
-    for i in 1u8..=N as u8 {
+    for i in 1..=u8::try_from(N).unwrap() {
         let pkt = client.recv_video().await.expect("receive packet");
         assert_eq!(pkt.data, vec![i]);
     }
@@ -923,7 +923,7 @@ async fn test_e2e_frames_flow_from_host_to_client() {
     });
 
     let mut client = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
-    for i in 1u8..=N as u8 {
+    for i in 1..=u8::try_from(N).unwrap() {
         let pkt = client.recv_video().await.expect("recv_video");
         assert_eq!(pkt.data, vec![i]);
     }

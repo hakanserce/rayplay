@@ -1,7 +1,7 @@
 //! End-to-end integration tests for codec negotiation handshake + streaming.
 //!
 //! Tests the full flow: QUIC connect → control channel → handshake → stream.
-//! Uses the software fallback pipeline (OpenH264) so it runs on all platforms.
+//! Uses the software fallback pipeline (`OpenH264`) so it runs on all platforms.
 
 #[path = "e2e_helpers.rs"]
 mod e2e_helpers;

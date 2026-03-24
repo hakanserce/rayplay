@@ -5,7 +5,7 @@ use rayplay_network::QuicVideoTransport;
 use rayplay_video::packet::EncodedPacket;
 
 /// Measures end-to-end latency of the stub pipeline:
-/// create packet → send_video (QUIC loopback) → recv_video.
+/// create packet → `send_video` (QUIC loopback) → `recv_video`.
 ///
 /// This benchmarks the critical transport path that AC-3 targets at <16ms.
 /// Capture and encode are excluded because they require platform-specific

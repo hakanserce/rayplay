@@ -318,14 +318,14 @@ fn test_codec_h264_equality() {
 #[test]
 fn test_codec_hevc_clone() {
     let codec = Codec::Hevc;
-    let cloned = codec.clone();
+    let cloned = codec;
     assert_eq!(codec, cloned);
 }
 
 #[test]
 fn test_codec_h264_clone() {
     let codec = Codec::H264;
-    let cloned = codec.clone();
+    let cloned = codec;
     assert_eq!(codec, cloned);
 }
 
