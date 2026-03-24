@@ -1,4 +1,10 @@
 //! Shared test helpers for end-to-end integration tests.
+#![allow(
+    clippy::must_use_candidate,
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::similar_names
+)]
 
 use std::time::{Duration, Instant};
 
@@ -213,7 +219,7 @@ pub fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
 /// Drives recv → decode → render → channel-send loop.
 ///
 /// Like [`run_client_recv_decode`] but also renders each decoded frame through
-/// an offscreen [`WgpuRenderer`], exercising the full VtDecoder → IOSurface →
+/// an offscreen [`WgpuRenderer`], exercising the full `VtDecoder` → `IOSurface` →
 /// Metal → wgpu render path that the production client uses.
 #[allow(dead_code)]
 pub async fn run_client_recv_decode_render(
@@ -260,11 +266,12 @@ pub fn collect_frames(
     let deadline = Instant::now() + timeout;
 
     while frames.len() < expected && Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(remaining) {
-            Ok(frame) => frames.push(frame),
-            Err(_) => break,
+        if let Ok(frame) = rx.try_recv() {
+            frames.push(frame);
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
+
     frames
 }

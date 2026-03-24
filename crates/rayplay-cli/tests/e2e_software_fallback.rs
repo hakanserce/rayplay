@@ -1,6 +1,6 @@
 //! End-to-end integration tests using the full software fallback pipeline.
 //!
-//! Encoder: OpenH264 (H.264), Decoder: OpenH264 (H.264), Transport: QUIC loopback.
+//! Encoder: `OpenH264` (H.264), Decoder: `OpenH264` (H.264), Transport: QUIC loopback.
 //! Runs on all platforms with the `fallback` feature (enabled by default).
 
 #[path = "e2e_helpers.rs"]

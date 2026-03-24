@@ -433,9 +433,8 @@ async fn test_auth_invalid_signature_rejected() {
 
     // Wait for challenge
     let challenge = client_ctrl2.recv_msg("test").await.unwrap();
-    let _nonce = match challenge {
-        ControlMessage::AuthChallenge(n) => n,
-        _ => panic!("Expected AuthChallenge"),
+    let ControlMessage::AuthChallenge(_nonce) = challenge else {
+        panic!("Expected AuthChallenge")
     };
 
     // Send response with correct pubkey but wrong signature (all zeros)

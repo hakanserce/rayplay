@@ -139,7 +139,7 @@ async fn test_max_control_message_size_constant() {
 
 /// QUIC only notifies the peer of a new bidi stream when a STREAM frame
 /// is sent (i.e. when the opener writes data). This test verifies that
-/// open_bi + write triggers the server's accept_bi.
+/// `open_bi` + write triggers the server's `accept_bi`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_raw_quic_bidi_stream_works() {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();

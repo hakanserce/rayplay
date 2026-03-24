@@ -37,7 +37,7 @@ fn bench_frame_alloc_bgra(c: &mut Criterion) {
         ("1080p", 1920, 1080),
         ("4k", 3840, 2160),
     ] {
-        let bytes = (w * h * 4) as u64;
+        let bytes = u64::from(w * h * 4);
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("bgra", label), &(w, h), |b, &(w, h)| {
             b.iter(|| black_box(make_bgra_frame(w, h)));
@@ -55,7 +55,7 @@ fn bench_frame_alloc_nv12(c: &mut Criterion) {
         ("1080p", 1920, 1080),
         ("4k", 3840, 2160),
     ] {
-        let bytes = (w * h * 3 / 2) as u64;
+        let bytes = u64::from(w * h * 3 / 2);
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("nv12", label), &(w, h), |b, &(w, h)| {
             b.iter(|| black_box(make_nv12_frame(w, h)));
@@ -146,7 +146,7 @@ fn bench_present_frame_bgra(c: &mut Criterion) {
     let mut group = c.benchmark_group("present_frame");
 
     for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
-        let bytes = (w * h * 4) as u64;
+        let bytes = u64::from(w * h * 4);
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("bgra", label), &(w, h), |b, &(w, h)| {
             let (device, queue) = try_create_headless_device().expect("GPU was available above");
@@ -169,7 +169,7 @@ fn bench_present_frame_nv12(c: &mut Criterion) {
     let mut group = c.benchmark_group("present_frame");
 
     for (label, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
-        let bytes = (w * h * 3 / 2) as u64;
+        let bytes = u64::from(w * h * 3 / 2);
         group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(BenchmarkId::new("nv12", label), &(w, h), |b, &(w, h)| {
             let (device, queue) = try_create_headless_device().expect("GPU was available above");

@@ -36,7 +36,7 @@ fn bench_auto_bitrate(c: &mut Criterion) {
             &(w, h, fps),
             |b, &(w, h, f)| {
                 let cfg = EncoderConfig::new(w, h, f);
-                b.iter(|| black_box(cfg.resolved_bitrate()))
+                b.iter(|| black_box(cfg.resolved_bitrate()));
             },
         );
     }
@@ -63,7 +63,7 @@ fn bench_frame_chunker(c: &mut Criterion) {
             |b, &size| {
                 let packet = make_encoded_packet(size);
                 let mut chunker = FrameChunker::new(DEFAULT_CHUNK_SIZE);
-                b.iter(|| black_box(chunker.chunk(&packet)))
+                b.iter(|| black_box(chunker.chunk(&packet)));
             },
         );
     }
@@ -80,7 +80,7 @@ fn bench_raw_frame_alloc(c: &mut Criterion) {
         let pixels = (w as usize) * (h as usize) * 4;
         group.throughput(Throughput::Bytes(pixels as u64));
         group.bench_with_input(BenchmarkId::new("new", label), &(w, h), |b, &(w, h)| {
-            b.iter(|| black_box(make_raw_frame(w, h, 0)))
+            b.iter(|| black_box(make_raw_frame(w, h, 0)));
         });
     }
 
@@ -91,7 +91,7 @@ fn bench_raw_frame_alloc(c: &mut Criterion) {
 
 fn bench_bitrate_resolve(c: &mut Criterion) {
     c.bench_function("bitrate_auto_resolve_1080p60", |b| {
-        b.iter(|| black_box(Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 60)))
+        b.iter(|| black_box(Bitrate::Auto.resolve(Codec::Hevc, 1920, 1080, 60)));
     });
 }
 

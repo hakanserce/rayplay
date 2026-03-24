@@ -97,7 +97,7 @@ jobs:
         run: cargo check --workspace
 
       - name: Clippy
-        run: cargo clippy --workspace -- -W clippy::pedantic
+        run: cargo clippy --all-targets --workspace -- -W clippy::pedantic
 
   # ── FFmpeg fallback (Linux only) ───────────────────────────────────────
   ffmpeg-check:
@@ -136,7 +136,7 @@ jobs:
         run: cargo nextest run --workspace --features ffmpeg-fallback
 
       - name: Lint
-        run: cargo clippy --workspace --features ffmpeg-fallback -- -W clippy::pedantic
+        run: cargo clippy --all-targets --workspace --features ffmpeg-fallback -- -W clippy::pedantic
 
   # ── Benchmarks (PR only) ───────────────────────────────────────────────
   benchmark:

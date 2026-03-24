@@ -18,7 +18,7 @@ fn test_capture_config_clone() {
         target_fps: 30,
         acquire_timeout_ms: 50,
     };
-    let cloned = cfg.clone();
+    let cloned = cfg;
     assert_eq!(cloned.target_fps, 30);
     assert_eq!(cloned.acquire_timeout_ms, 50);
 }

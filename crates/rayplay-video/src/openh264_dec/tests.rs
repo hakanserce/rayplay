@@ -205,9 +205,7 @@ fn test_openh264_decoder_decode_invalid_data_returns_error_or_none() {
     let packet = EncodedPacket::new(vec![0xFF; 64], false, 0, 16_667);
     let result = dec.decode(&packet);
     // Either Ok(None) or Err — both are acceptable for invalid data
-    match result {
-        Ok(None) => {} // decoder buffered or ignored
-        Ok(Some(_)) => panic!("should not decode garbage into a frame"),
-        Err(_) => {} // decoder correctly rejected
+    if let Ok(Some(_)) = result {
+        panic!("should not decode garbage into a frame");
     }
 }
