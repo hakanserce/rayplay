@@ -40,8 +40,7 @@ mod windows {
         encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         nvenc_sys::{
             H264_FLAG_REPEAT_SPS_PPS, HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT, HEVC_FLAG_REPEAT_SPS_PPS,
-            NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_CONFIG, NV_ENC_CODEC_H264_GUID,
-            NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
+            NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_H264_GUID, NV_ENC_CODEC_HEVC_GUID,
             NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_H264_PROFILE_MAIN_GUID,
             NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS, NV_ENC_INPUT_RESOURCE_TYPE,
             NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE, NV_ENC_PARAMS_RC_VBR,
@@ -248,18 +247,20 @@ mod windows {
             encode_config.rcParams.maxBitRate = config.resolved_bitrate() * 12 / 10; // 20% headroom
             encode_config.rcParams.rc_flags = RC_FLAG_ENABLE_AQ | RC_FLAG_ZERO_REORDER_DELAY;
 
-            // Codec-specific configuration
+            // Codec-specific configuration — modify the preset's codec config
+            // in-place rather than replacing it, preserving driver-tuned values
+            // like maxNumRefFrames, level, etc. (matches FFmpeg approach).
             match config.codec {
                 Codec::Hevc => {
-                    let mut hevc = NV_ENC_CONFIG_HEVC::default();
+                    let hevc = unsafe { &mut encode_config.encodeCodecConfig.hevcConfig };
                     hevc.hevc_flags =
                         HEVC_FLAG_REPEAT_SPS_PPS | (1 << HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT); // chromaFormatIDC=1 (YUV420)
-                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG { hevcConfig: hevc };
+                    hevc.idrPeriod = encode_config.gopLength;
                 }
                 Codec::H264 => {
-                    let mut h264 = NV_ENC_CONFIG_H264::default();
+                    let h264 = unsafe { &mut encode_config.encodeCodecConfig.h264Config };
                     h264.h264_flags = H264_FLAG_REPEAT_SPS_PPS;
-                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG { h264Config: h264 };
+                    h264.idrPeriod = encode_config.gopLength;
                 }
             }
 
