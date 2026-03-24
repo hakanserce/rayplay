@@ -231,11 +231,52 @@ pub fn create_encoder(
 
     #[cfg(target_os = "windows")]
     {
-        use crate::nvenc::NvencEncoder;
-        NvencEncoder::new(config).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+        // For hardware mode without device pointer, create a temporary device
+        use crate::d3d11_device::SharedD3D11Device;
+        let device = SharedD3D11Device::new().map_err(|e| VideoError::EncodingFailed {
+            reason: format!("Failed to create D3D11 device: {e}"),
+        })?;
+        create_encoder_with_device(config, mode, device.device_ptr())
     }
     #[cfg(not(target_os = "windows"))]
     {
+        create_software_encoder(config)
+    }
+}
+
+/// Returns the platform-appropriate hardware encoder with a specific D3D11 device.
+///
+/// This is the preferred way to create hardware encoders on Windows when you have
+/// a `SharedD3D11Device` that should be shared between capture and encoding.
+///
+/// # Arguments
+///
+/// * `config` - Encoder configuration
+/// * `mode` - Pipeline mode (Software/Hardware)
+/// * `device_ptr` - Raw pointer to `ID3D11Device` from `SharedD3D11Device::device_ptr()`
+///
+/// # Errors
+///
+/// Returns [`VideoError::UnsupportedPlatform`] on non-Windows, or
+/// [`VideoError::EncodingFailed`] if the NVENC session cannot be opened.
+#[allow(clippy::needless_pass_by_value)]
+pub fn create_encoder_with_device(
+    config: EncoderConfig,
+    mode: PipelineMode,
+    device_ptr: *mut std::ffi::c_void,
+) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    if mode == PipelineMode::Software {
+        return create_software_encoder(config);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use crate::nvenc::NvencEncoder;
+        NvencEncoder::new(config, device_ptr).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = device_ptr; // Unused on non-Windows
         create_software_encoder(config)
     }
 }

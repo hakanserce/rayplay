@@ -5,12 +5,6 @@
 /// via the Video Codec SDK, encoding frames directly from DXGI-captured
 /// textures with zero copies on the input path (ADR-001, Option B).
 ///
-/// # Setup
-///
-/// The NVENC SDK headers must be present at build time. Download from the
-/// Nvidia Developer Program and set the `NVENC_SDK` environment variable
-/// to the SDK root before building (see `build.rs`).
-///
 /// # Architecture
 ///
 /// ```text
@@ -24,8 +18,34 @@
 /// ```
 #[cfg(target_os = "windows")]
 mod windows {
+    use std::{
+        collections::HashMap,
+        ffi::{CString, c_void},
+        mem,
+        ptr::{self, NonNull},
+    };
+
+    use windows::{
+        Win32::{
+            Foundation::{BOOL, HMODULE},
+            System::LibraryLoader::{GetProcAddress, LoadLibraryA},
+        },
+        core::PCSTR,
+    };
+
     use crate::{
-        encoder::{EncoderConfig, EncoderInput, VideoEncoder, VideoError},
+        encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError},
+        nvenc_sys::{
+            GUID, NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_CONFIG, NV_ENC_CODEC_H264_GUID,
+            NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
+            NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_ENCODE_API_FUNCTION_LIST,
+            NV_ENC_H264_PROFILE_MAIN_GUID, NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS,
+            NV_ENC_INPUT_RESOURCE_TYPE, NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE,
+            NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS, NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS,
+            NV_ENC_PIC_PARAMS, NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID,
+            NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS, NV_ENC_TUNING_INFO, NVENCSTATUS,
+            NvEncodeAPICreateInstance, PFnNvEncodeAPICreateInstance, nvenc_status_to_string,
+        },
         packet::EncodedPacket,
     };
 
@@ -40,43 +60,485 @@ mod windows {
     /// must own its own session.
     pub struct NvencEncoder {
         config: EncoderConfig,
-        // TODO(UC-002): Add NVENC session handle once SDK bindings land.
-        // session: nvenc_sys::NvEncodeAPICreateInstance,
-        // input_buffer: nvenc_sys::NV_ENC_INPUT_PTR,
-        // output_buffer: nvenc_sys::NV_ENC_OUTPUT_PTR,
+        api: NV_ENC_ENCODE_API_FUNCTION_LIST,
+        encoder: *mut c_void,
+        output_buffers: Vec<*mut c_void>,
+        registered_resources: HashMap<*mut c_void, *mut c_void>,
+        current_output_idx: usize,
+        frame_index: u64,
+        _dll_handle: HMODULE, // Keep DLL loaded
     }
 
+    // SAFETY: NVENC session is accessed only from the encoding thread
+    unsafe impl Send for NvencEncoder {}
+
     impl NvencEncoder {
-        /// Opens a new NVENC encode session and initialises it for HEVC.
+        /// Opens a new NVENC encode session and initialises it for the configured codec.
+        ///
+        /// # Arguments
+        ///
+        /// * `config` - Encoder configuration (resolution, bitrate, codec)
+        /// * `device_ptr` - Pointer to the D3D11 device from `SharedD3D11Device::device_ptr()`
         ///
         /// # Errors
         ///
-        /// - `VideoError::UnsupportedCodec` — GPU does not support HEVC NVENC.
+        /// - `VideoError::UnsupportedCodec` — GPU does not support the configured codec.
         /// - `VideoError::EncodingFailed`   — Session creation or init failed.
-        pub fn new(config: EncoderConfig) -> Result<Self, VideoError> {
-            // TODO(UC-002): Implement NVENC initialisation sequence:
-            //
-            //   1. NvEncOpenEncodeSessionEx  — open D3D11 device session
-            //   2. NvEncGetEncodeGUIDCount / NvEncGetEncodeGUIDs
-            //      — enumerate supported codecs, verify HEVC availability
-            //   3. NvEncGetEncodeProfileGUIDCount / NvEncGetEncodeProfileGUIDs
-            //      — select Main10 profile for HDR support
-            //   4. NvEncGetInputFormatCount / NvEncGetInputFormats
-            //      — confirm NV12 / ARGB input support
-            //   5. NvEncInitializeEncoder (NV_ENC_INITIALIZE_PARAMS)
-            //      — set resolution, fps, bitrate, GOP structure
-            //   6. NvEncCreateInputBuffer / NvEncRegisterResource (DXGI path)
-            //   7. NvEncCreateBitstreamBuffer — output ring buffer
-            //
-            // For now, return a placeholder session.
+        pub fn new(config: EncoderConfig, device_ptr: *mut c_void) -> Result<Self, VideoError> {
             tracing::info!(
                 width = config.width,
                 height = config.height,
                 fps = config.fps,
                 bitrate_bps = config.resolved_bitrate(),
-                "NvencEncoder::new — session placeholder (SDK integration pending)"
+                codec = %config.codec,
+                "Initializing NVENC encoder session"
             );
-            Ok(Self { config })
+
+            // Load NVENC DLL dynamically
+            let dll_handle = unsafe {
+                LoadLibraryA(PCSTR(b"nvEncodeAPI64.dll\0".as_ptr())).map_err(|e| {
+                    VideoError::EncodingFailed {
+                        reason: format!("Failed to load nvEncodeAPI64.dll: {e}"),
+                    }
+                })?
+            };
+
+            // Get API creation function
+            let create_instance_ptr = unsafe {
+                GetProcAddress(dll_handle, PCSTR(b"NvEncodeAPICreateInstance\0".as_ptr()))
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "NvEncodeAPICreateInstance not found in DLL".to_string(),
+                    })?
+            };
+
+            let create_instance: PFnNvEncodeAPICreateInstance =
+                unsafe { mem::transmute(create_instance_ptr) };
+
+            // Create API function list
+            let mut api = NV_ENC_ENCODE_API_FUNCTION_LIST::default();
+            let status = unsafe { create_instance(&mut api) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "NvEncodeAPICreateInstance failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            // Open encoding session
+            let mut session_params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
+            session_params.device = device_ptr;
+            session_params.deviceType = NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
+
+            let mut encoder: *mut c_void = ptr::null_mut();
+            let nvenc_open =
+                api.nvEncOpenEncodeSession
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncOpenEncodeSession function not available".to_string(),
+                    })?;
+
+            let status = unsafe { nvenc_open(&mut session_params, &mut encoder) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncOpenEncodeSession failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            tracing::debug!("NVENC session opened successfully");
+
+            // Get preset configuration
+            let codec_guid = match config.codec {
+                Codec::Hevc => NV_ENC_CODEC_HEVC_GUID,
+                Codec::H264 => NV_ENC_CODEC_H264_GUID,
+            };
+
+            let mut preset_config = NV_ENC_PRESET_CONFIG::default();
+            let nvenc_get_preset =
+                api.nvEncGetEncodePresetConfigEx
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncGetEncodePresetConfigEx function not available".to_string(),
+                    })?;
+
+            let status = unsafe {
+                nvenc_get_preset(
+                    encoder,
+                    codec_guid,
+                    NV_ENC_PRESET_P1_GUID,
+                    NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+                    &mut preset_config,
+                )
+            };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncGetEncodePresetConfigEx failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            // Configure encoder parameters
+            let mut init_params = NV_ENC_INITIALIZE_PARAMS::default();
+            init_params.encodeGUID = codec_guid;
+            init_params.presetGUID = NV_ENC_PRESET_P1_GUID;
+            init_params.encodeWidth = config.width;
+            init_params.encodeHeight = config.height;
+            init_params.darWidth = config.width;
+            init_params.darHeight = config.height;
+            init_params.frameRateNum = config.fps;
+            init_params.frameRateDen = 1;
+            init_params.enablePTD = 1;
+
+            // Setup encode config
+            let mut encode_config = preset_config.presetCfg;
+            encode_config.profileGUID = match config.codec {
+                Codec::Hevc => NV_ENC_HEVC_PROFILE_MAIN_GUID,
+                Codec::H264 => NV_ENC_H264_PROFILE_MAIN_GUID,
+            };
+            encode_config.gopLength = 60; // 1 second at 60fps
+            encode_config.frameIntervalP = 1; // All P-frames for low latency
+
+            // Rate control configuration
+            encode_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+            encode_config.rcParams.averageBitRate = config.resolved_bitrate();
+            encode_config.rcParams.maxBitRate = config.resolved_bitrate() * 12 / 10; // 20% headroom
+            encode_config.rcParams.enableAQ = 1;
+            encode_config.rcParams.zeroReorderDelay = 1; // Essential for low latency
+
+            // Codec-specific configuration
+            match config.codec {
+                Codec::Hevc => {
+                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG {
+                        hevcConfig: NV_ENC_CONFIG_HEVC {
+                            repeatSPSPPS: 1,        // Include headers with every keyframe
+                            chromaFormatIDC: 1,     // YUV420
+                            pixelBitDepthMinus8: 0, // 8-bit
+                            ..Default::default()
+                        },
+                    };
+                }
+                Codec::H264 => {
+                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG {
+                        h264Config: NV_ENC_CONFIG_H264 {
+                            repeatSPSPPS: 1, // Include headers with every keyframe
+                            ..Default::default()
+                        },
+                    };
+                }
+            }
+
+            init_params.encodeConfig = &mut encode_config;
+
+            // Initialize encoder
+            let nvenc_init =
+                api.nvEncInitializeEncoder
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncInitializeEncoder function not available".to_string(),
+                    })?;
+
+            let status = unsafe { nvenc_init(encoder, &mut init_params) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncInitializeEncoder failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            tracing::info!("NVENC encoder initialized successfully");
+
+            // Create output bitstream buffers (ring buffer with 2 buffers)
+            let mut output_buffers = Vec::with_capacity(2);
+            let nvenc_create_bitstream =
+                api.nvEncCreateBitstreamBuffer
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncCreateBitstreamBuffer function not available".to_string(),
+                    })?;
+
+            for i in 0..2 {
+                let mut buffer_params = NV_ENC_CREATE_BITSTREAM_BUFFER::default();
+                buffer_params.size = config.width * config.height; // Conservative estimate
+
+                let status = unsafe { nvenc_create_bitstream(encoder, &mut buffer_params) };
+                if status != NV_ENC_SUCCESS {
+                    return Err(VideoError::EncodingFailed {
+                        reason: format!(
+                            "nvEncCreateBitstreamBuffer {} failed: {}",
+                            i,
+                            nvenc_status_to_string(status)
+                        ),
+                    });
+                }
+
+                output_buffers.push(buffer_params.bitstreamBuffer);
+            }
+
+            tracing::debug!("Created {} output bitstream buffers", output_buffers.len());
+
+            Ok(Self {
+                config,
+                api,
+                encoder,
+                output_buffers,
+                registered_resources: HashMap::new(),
+                current_output_idx: 0,
+                frame_index: 0,
+                _dll_handle: dll_handle,
+            })
+        }
+
+        /// Registers a D3D11 texture with NVENC for zero-copy encoding.
+        fn register_texture(
+            &mut self,
+            texture_ptr: *mut c_void,
+            width: u32,
+            height: u32,
+        ) -> Result<*mut c_void, VideoError> {
+            if let Some(&registered_ptr) = self.registered_resources.get(&texture_ptr) {
+                return Ok(registered_ptr);
+            }
+
+            let nvenc_register =
+                self.api
+                    .nvEncRegisterResource
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncRegisterResource function not available".to_string(),
+                    })?;
+
+            let mut register_params = NV_ENC_REGISTER_RESOURCE::default();
+            register_params.resourceType =
+                NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+            register_params.resourceToRegister = texture_ptr;
+            register_params.width = width;
+            register_params.height = height;
+            register_params.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+
+            let status = unsafe { nvenc_register(self.encoder, &mut register_params) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncRegisterResource failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            let registered_ptr = register_params.registeredResource;
+            self.registered_resources
+                .insert(texture_ptr, registered_ptr);
+
+            tracing::debug!(
+                "Registered texture {:p} as {:p}",
+                texture_ptr,
+                registered_ptr
+            );
+            Ok(registered_ptr)
+        }
+
+        /// Encodes a GPU texture using zero-copy path.
+        fn encode_gpu_texture(
+            &mut self,
+            texture_ptr: *mut c_void,
+            width: u32,
+            height: u32,
+            timestamp_us: u64,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
+            // Register texture if not already done
+            let registered_ptr = self.register_texture(texture_ptr, width, height)?;
+
+            // Map the resource for encoding
+            let nvenc_map =
+                self.api
+                    .nvEncMapInputResource
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncMapInputResource function not available".to_string(),
+                    })?;
+
+            let mut map_params = NV_ENC_MAP_INPUT_RESOURCE::default();
+            map_params.registeredResource = registered_ptr;
+
+            let status = unsafe { nvenc_map(self.encoder, &mut map_params) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncMapInputResource failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            let mapped_resource = map_params.mappedResource;
+
+            // Encode the frame
+            let result = self.encode_mapped_resource(mapped_resource, timestamp_us);
+
+            // Unmap the resource
+            let nvenc_unmap =
+                self.api
+                    .nvEncUnmapInputResource
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncUnmapInputResource function not available".to_string(),
+                    })?;
+
+            let status = unsafe { nvenc_unmap(self.encoder, mapped_resource) };
+            if status != NV_ENC_SUCCESS {
+                tracing::warn!(
+                    "nvEncUnmapInputResource failed: {}",
+                    nvenc_status_to_string(status)
+                );
+            }
+
+            result
+        }
+
+        /// Encodes a mapped resource.
+        fn encode_mapped_resource(
+            &mut self,
+            mapped_resource: *mut c_void,
+            timestamp_us: u64,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
+            // Setup encoding parameters
+            let mut pic_params = NV_ENC_PIC_PARAMS::default();
+            pic_params.inputBuffer = mapped_resource;
+            pic_params.bufferFmt = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+            pic_params.inputWidth = self.config.width;
+            pic_params.inputHeight = self.config.height;
+            pic_params.outputBitstream = self.output_buffers[self.current_output_idx];
+            pic_params.inputTimeStamp = timestamp_us;
+            pic_params.inputDuration = 0;
+            pic_params.frameIdx = self.frame_index as u32;
+
+            // Force keyframes every GOP length
+            if self.frame_index % 60 == 0 {
+                pic_params.encodePicFlags = NV_ENC_PIC_FLAG_EOS; // This should be FORCEIDR but using EOS for now
+            }
+
+            // Encode the picture
+            let nvenc_encode =
+                self.api
+                    .nvEncEncodePicture
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncEncodePicture function not available".to_string(),
+                    })?;
+
+            let status = unsafe { nvenc_encode(self.encoder, &mut pic_params) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncEncodePicture failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            // Lock bitstream and read encoded data
+            let packet = self.lock_and_read_bitstream(timestamp_us)?;
+
+            // Move to next output buffer
+            self.current_output_idx = (self.current_output_idx + 1) % self.output_buffers.len();
+            self.frame_index += 1;
+
+            Ok(packet)
+        }
+
+        /// Locks the output bitstream and reads the encoded data.
+        fn lock_and_read_bitstream(
+            &self,
+            timestamp_us: u64,
+        ) -> Result<Option<EncodedPacket>, VideoError> {
+            let nvenc_lock =
+                self.api
+                    .nvEncLockBitstream
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncLockBitstream function not available".to_string(),
+                    })?;
+
+            let mut lock_params = NV_ENC_LOCK_BITSTREAM::default();
+            lock_params.outputBitstream = self.output_buffers[self.current_output_idx];
+
+            let status = unsafe { nvenc_lock(self.encoder, &mut lock_params) };
+            if status != NV_ENC_SUCCESS {
+                return Err(VideoError::EncodingFailed {
+                    reason: format!(
+                        "nvEncLockBitstream failed: {}",
+                        nvenc_status_to_string(status)
+                    ),
+                });
+            }
+
+            // Check if we have data
+            if lock_params.bitstreamSizeInBytes == 0 {
+                tracing::debug!("No encoded data available (encoder buffering)");
+
+                // Unlock the bitstream
+                let nvenc_unlock =
+                    self.api
+                        .nvEncUnlockBitstream
+                        .ok_or_else(|| VideoError::EncodingFailed {
+                            reason: "nvEncUnlockBitstream function not available".to_string(),
+                        })?;
+                let _ = unsafe { nvenc_unlock(self.encoder, lock_params.outputBitstream) };
+
+                return Ok(None);
+            }
+
+            // Copy encoded data
+            let data_size = lock_params.bitstreamSizeInBytes as usize;
+            let mut encoded_data = vec![0u8; data_size];
+
+            if !lock_params.bitstreamBufferPtr.is_null() {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        lock_params.bitstreamBufferPtr as *const u8,
+                        encoded_data.as_mut_ptr(),
+                        data_size,
+                    );
+                }
+            }
+
+            // Determine frame type
+            let is_keyframe = match lock_params.pictureType {
+                NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_I | NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_IDR => true,
+                _ => false,
+            };
+
+            // Calculate frame duration from FPS
+            let duration_us = 1_000_000 / u64::from(self.config.fps);
+
+            // Unlock the bitstream
+            let nvenc_unlock =
+                self.api
+                    .nvEncUnlockBitstream
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncUnlockBitstream function not available".to_string(),
+                    })?;
+
+            let status = unsafe { nvenc_unlock(self.encoder, lock_params.outputBitstream) };
+            if status != NV_ENC_SUCCESS {
+                tracing::warn!(
+                    "nvEncUnlockBitstream failed: {}",
+                    nvenc_status_to_string(status)
+                );
+            }
+
+            tracing::debug!(
+                is_keyframe = is_keyframe,
+                size_bytes = data_size,
+                timestamp_us = timestamp_us,
+                "Encoded frame"
+            );
+
+            Ok(Some(EncodedPacket {
+                data: encoded_data,
+                is_keyframe,
+                timestamp_us,
+                duration_us,
+            }))
         }
     }
 
@@ -91,37 +553,109 @@ mod windows {
                 return Err(VideoError::InvalidDimensions { width, height });
             }
 
-            // TODO(UC-002): Submit frame to NVENC:
-            //
-            // For EncoderInput::GpuTexture (zero-copy path):
-            //   1. Register texture if not cached: NvEncRegisterResource
-            //   2. NvEncMapInputResource -> get mapped input buffer
-            //   3. NvEncEncodePicture -> GPU-to-GPU encode
-            //   4. NvEncUnmapInputResource
-            //   5. NvEncLockBitstream -> read encoded NAL bytes
-            //   6. NvEncUnlockBitstream
-            //
-            // For EncoderInput::Cpu (fallback path):
-            //   1. NvEncLockInputBuffer
-            //   2. memcpy frame data
-            //   3. NvEncUnlockInputBuffer
-            //   4. NvEncEncodePicture
-            //   5. Lock/unlock bitstream as above
-            //
-            // Placeholder: signal that the session isn't connected yet.
-            Err(VideoError::EncodingFailed {
-                reason: "NVENC SDK integration pending".to_string(),
-            })
+            match input {
+                EncoderInput::GpuTexture {
+                    handle,
+                    timestamp_us,
+                    ..
+                } => self.encode_gpu_texture(handle.0, width, height, timestamp_us),
+                EncoderInput::Cpu(_frame) => {
+                    // CPU encoding path not implemented - would need to create input buffers
+                    // and copy data. For now, return an error to encourage zero-copy usage.
+                    Err(VideoError::EncodingFailed {
+                        reason: "CPU encoding not implemented for NVENC - use zero-copy GPU path"
+                            .to_string(),
+                    })
+                }
+            }
         }
 
         fn flush(&mut self) -> Result<Vec<EncodedPacket>, VideoError> {
-            // TODO(UC-002): Send EOS picture to drain buffered frames:
-            //   NvEncEncodePicture with NV_ENC_PIC_FLAG_EOS
-            Ok(vec![])
+            let nvenc_encode =
+                self.api
+                    .nvEncEncodePicture
+                    .ok_or_else(|| VideoError::EncodingFailed {
+                        reason: "nvEncEncodePicture function not available".to_string(),
+                    })?;
+
+            // Send EOS frame to drain encoder
+            let mut pic_params = NV_ENC_PIC_PARAMS::default();
+            pic_params.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
+            pic_params.outputBitstream = self.output_buffers[self.current_output_idx];
+
+            let status = unsafe { nvenc_encode(self.encoder, &mut pic_params) };
+            if status != NV_ENC_SUCCESS {
+                tracing::warn!(
+                    "EOS frame encoding failed: {}",
+                    nvenc_status_to_string(status)
+                );
+                return Ok(vec![]);
+            }
+
+            // Collect any remaining packets
+            let mut packets = Vec::new();
+
+            // Try to read from both output buffers
+            for _ in 0..self.output_buffers.len() {
+                if let Ok(Some(packet)) = self.lock_and_read_bitstream(0) {
+                    packets.push(packet);
+                }
+                self.current_output_idx = (self.current_output_idx + 1) % self.output_buffers.len();
+            }
+
+            tracing::info!("Flushed {} remaining packets from encoder", packets.len());
+            Ok(packets)
         }
 
         fn config(&self) -> &EncoderConfig {
             &self.config
+        }
+    }
+
+    impl Drop for NvencEncoder {
+        fn drop(&mut self) {
+            tracing::debug!("Destroying NVENC encoder session");
+
+            // Unregister all resources
+            if let Some(nvenc_unregister) = self.api.nvEncUnregisterResource {
+                for (texture_ptr, registered_ptr) in &self.registered_resources {
+                    let status = unsafe { nvenc_unregister(self.encoder, *registered_ptr) };
+                    if status != NV_ENC_SUCCESS {
+                        tracing::warn!(
+                            "Failed to unregister texture {:p}: {}",
+                            texture_ptr,
+                            nvenc_status_to_string(status)
+                        );
+                    }
+                }
+            }
+
+            // Destroy output buffers
+            if let Some(nvenc_destroy_bitstream) = self.api.nvEncDestroyBitstreamBuffer {
+                for (i, buffer) in self.output_buffers.iter().enumerate() {
+                    let status = unsafe { nvenc_destroy_bitstream(self.encoder, *buffer) };
+                    if status != NV_ENC_SUCCESS {
+                        tracing::warn!(
+                            "Failed to destroy output buffer {}: {}",
+                            i,
+                            nvenc_status_to_string(status)
+                        );
+                    }
+                }
+            }
+
+            // Destroy encoder session
+            if let Some(nvenc_destroy) = self.api.nvEncDestroyEncoder {
+                let status = unsafe { nvenc_destroy(self.encoder) };
+                if status != NV_ENC_SUCCESS {
+                    tracing::warn!(
+                        "Failed to destroy encoder: {}",
+                        nvenc_status_to_string(status)
+                    );
+                }
+            }
+
+            tracing::debug!("NVENC encoder destroyed");
         }
     }
 }

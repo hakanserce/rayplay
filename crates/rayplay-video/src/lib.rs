@@ -56,6 +56,8 @@ pub mod ffmpeg_enc;
 pub mod d3d11_device;
 #[cfg(target_os = "windows")]
 pub mod dxgi_capture;
+#[cfg(target_os = "windows")]
+mod nvenc_sys;
 
 pub use capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer};
 #[cfg(target_os = "windows")]
@@ -68,7 +70,7 @@ pub use decoded_frame::{DecodedFrame, PixelFormat};
 pub use decoder::{VideoDecoder, create_decoder};
 pub use encoder::{
     Bitrate, Codec, EncoderConfig, EncoderInput, GpuTextureHandle, VideoEncoder, VideoError,
-    create_encoder,
+    create_encoder, create_encoder_with_device,
 };
 pub use frame::RawFrame;
 pub use packet::EncodedPacket;
