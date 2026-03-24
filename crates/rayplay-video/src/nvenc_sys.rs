@@ -487,7 +487,10 @@ pub(crate) mod ffi {
         fn default() -> Self {
             let mut s: Self = unsafe { std::mem::zeroed() };
             s.version = nvencapi_struct_version_high(5);
-            s.presetCfg = NV_ENC_CONFIG::default();
+            // Only set the inner version stamp — all other presetCfg fields are
+            // [out] parameters filled by the driver. Non-zero values cause
+            // NV_ENC_ERR_INVALID_PARAM on real hardware (matches FFmpeg approach).
+            s.presetCfg.version = nvencapi_struct_version_high(9);
             s
         }
     }
