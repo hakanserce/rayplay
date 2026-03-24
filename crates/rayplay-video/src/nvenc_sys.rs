@@ -3,7 +3,7 @@
 /// These types are manually defined to match the NVENC SDK without requiring
 /// bindgen or build-time dependencies. NVENC is loaded dynamically from
 /// `nvEncodeAPI64.dll` at runtime.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 #[allow(
     non_camel_case_types,
     non_snake_case,
@@ -810,36 +810,73 @@ pub(crate) mod ffi {
         preset_config: *mut NV_ENC_PRESET_CONFIG,
     ) -> NVENCSTATUS;
 
-    // Function list struct
+    // Function list struct — must match NVENC SDK 12.2 layout exactly.
+    //
+    // Each named field occupies one function-pointer slot (8 bytes on 64-bit).
+    // The SDK fills this struct by offset, so even unused slots must be present
+    // at the correct position.  Unused slots use `*mut c_void` placeholders.
+    //
+    // Reference: nvEncodeAPI.h `NV_ENCODE_API_FUNCTION_LIST` (SDK 12.2)
     #[repr(C)]
     pub struct NV_ENCODE_API_FUNCTION_LIST {
-        pub version: u32,
-        pub reserved: u32,
-        pub nvEncOpenEncodeSession: Option<PFnNvEncOpenEncodeSessionEx>,
-        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetEncodePresetConfig: Option<PFnNvEncGetEncodePresetConfigEx>,
-        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>,
-        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>,
-        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>,
-        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>,
-        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>,
-        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>,
-        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>,
-        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>,
-        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>,
-        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>,
-        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>,
-        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>,
-        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>,
-        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>,
-        pub reserved1: [*mut c_void; 287], // Pad to full API function list size
+        pub version: u32,  // +0
+        pub reserved: u32, // +4
+        // ── slots 1–7 (correct in previous version) ──
+        pub _nvEncOpenEncodeSession: *mut c_void, // slot  1 (deprecated)
+        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  2
+        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot  3
+        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  4
+        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot  5
+        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  6
+        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>, // slot  7
+        // ── slot 8 was missing ──
+        pub _nvEncGetEncodeCaps: *mut c_void, // slot  8
+        // ── slots 9–11 (shifted by 1 in previous version) ──
+        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot  9
+        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>,     // slot 10
+        pub _nvEncGetEncodePresetConfig: *mut c_void, // slot 11 (non-Ex, unused)
+        // ── slots 12–16 (were correct) ──
+        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>, // slot 12
+        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>, // slot 13
+        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>, // slot 14
+        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>, // slot 15
+        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>, // slot 16
+        // ── slots 17–19 (were at wrong positions) ──
+        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>, // slot 17
+        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>, // slot 18
+        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>, // slot 19
+        // ── slots 20–25 (were entirely missing) ──
+        pub _nvEncLockInputBuffer: *mut c_void,      // slot 20
+        pub _nvEncUnlockInputBuffer: *mut c_void,    // slot 21
+        pub _nvEncGetEncodeStats: *mut c_void,       // slot 22
+        pub _nvEncGetSequenceParams: *mut c_void,    // slot 23
+        pub _nvEncRegisterAsyncEvent: *mut c_void,   // slot 24
+        pub _nvEncUnregisterAsyncEvent: *mut c_void, // slot 25
+        // ── slots 26–28 (were at wrong positions) ──
+        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>, // slot 26
+        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>, // slot 27
+        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>,     // slot 28
+        // ── slots 29–33 (were missing) ──
+        pub _nvEncInvalidateRefFrames: *mut c_void, // slot 29
+        pub nvEncOpenEncodeSessionEx: Option<PFnNvEncOpenEncodeSessionEx>, // slot 30
+        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>, // slot 31
+        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>, // slot 32
+        pub _nvEncReconfigureEncoder: *mut c_void,  // slot 33
+        // ── slot 34 (reserved in SDK) ──
+        pub _reserved1: *mut c_void, // slot 34
+        // ── slots 35–39 (unused newer functions) ──
+        pub _nvEncCreateMVBuffer: *mut c_void,  // slot 35
+        pub _nvEncDestroyMVBuffer: *mut c_void, // slot 36
+        pub _nvEncRunMotionEstimationOnly: *mut c_void, // slot 37
+        pub _nvEncGetLastErrorString: *mut c_void, // slot 38
+        pub _nvEncSetIOCudaStreams: *mut c_void, // slot 39
+        // ── slot 40: the preset config Ex function we actually use ──
+        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>, // slot 40
+        // ── slots 41–42 (unused newer functions) ──
+        pub _nvEncGetSequenceParamEx: *mut c_void, // slot 41
+        pub _nvEncLookaheadPicture: *mut c_void,   // slot 42
+        // ── remaining reserved slots to reach 319 total function pointer slots ──
+        pub _reserved2: [*mut c_void; 277], // slots 43–319
     }
 
     impl Default for NV_ENCODE_API_FUNCTION_LIST {
@@ -847,31 +884,49 @@ pub(crate) mod ffi {
             Self {
                 version: struct_ver::<Self>(2),
                 reserved: 0,
-                nvEncOpenEncodeSession: None,
+                _nvEncOpenEncodeSession: std::ptr::null_mut(),
                 nvEncGetEncodeGUIDCount: None,
                 nvEncGetEncodeGUIDs: None,
                 nvEncGetEncodeProfileGUIDCount: None,
                 nvEncGetEncodeProfileGUIDs: None,
                 nvEncGetInputFormatCount: None,
                 nvEncGetInputFormats: None,
+                _nvEncGetEncodeCaps: std::ptr::null_mut(),
                 nvEncGetEncodePresetCount: None,
                 nvEncGetEncodePresetGUIDs: None,
-                nvEncGetEncodePresetConfig: None,
-                nvEncGetEncodePresetConfigEx: None,
+                _nvEncGetEncodePresetConfig: std::ptr::null_mut(),
                 nvEncInitializeEncoder: None,
                 nvEncCreateInputBuffer: None,
                 nvEncDestroyInputBuffer: None,
                 nvEncCreateBitstreamBuffer: None,
                 nvEncDestroyBitstreamBuffer: None,
-                nvEncRegisterResource: None,
-                nvEncUnregisterResource: None,
-                nvEncMapInputResource: None,
-                nvEncUnmapInputResource: None,
                 nvEncEncodePicture: None,
                 nvEncLockBitstream: None,
                 nvEncUnlockBitstream: None,
+                _nvEncLockInputBuffer: std::ptr::null_mut(),
+                _nvEncUnlockInputBuffer: std::ptr::null_mut(),
+                _nvEncGetEncodeStats: std::ptr::null_mut(),
+                _nvEncGetSequenceParams: std::ptr::null_mut(),
+                _nvEncRegisterAsyncEvent: std::ptr::null_mut(),
+                _nvEncUnregisterAsyncEvent: std::ptr::null_mut(),
+                nvEncMapInputResource: None,
+                nvEncUnmapInputResource: None,
                 nvEncDestroyEncoder: None,
-                reserved1: [std::ptr::null_mut(); 287],
+                _nvEncInvalidateRefFrames: std::ptr::null_mut(),
+                nvEncOpenEncodeSessionEx: None,
+                nvEncRegisterResource: None,
+                nvEncUnregisterResource: None,
+                _nvEncReconfigureEncoder: std::ptr::null_mut(),
+                _reserved1: std::ptr::null_mut(),
+                _nvEncCreateMVBuffer: std::ptr::null_mut(),
+                _nvEncDestroyMVBuffer: std::ptr::null_mut(),
+                _nvEncRunMotionEstimationOnly: std::ptr::null_mut(),
+                _nvEncGetLastErrorString: std::ptr::null_mut(),
+                _nvEncSetIOCudaStreams: std::ptr::null_mut(),
+                nvEncGetEncodePresetConfigEx: None,
+                _nvEncGetSequenceParamEx: std::ptr::null_mut(),
+                _nvEncLookaheadPicture: std::ptr::null_mut(),
+                _reserved2: [std::ptr::null_mut(); 277],
             }
         }
     }
@@ -896,6 +951,213 @@ pub(crate) mod ffi {
             NV_ENC_ERR_RESOURCE_NOT_REGISTERED => "NV_ENC_ERR_RESOURCE_NOT_REGISTERED",
             NV_ENC_ERR_RESOURCE_NOT_MAPPED => "NV_ENC_ERR_RESOURCE_NOT_MAPPED",
             _ => "UNKNOWN_NVENC_ERROR",
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::ffi::c_void;
+        use std::mem;
+
+        const PTR: usize = mem::size_of::<*mut c_void>();
+
+        // ── struct total size ──
+
+        #[test]
+        fn function_list_total_size() {
+            // version(4) + reserved(4) + 319 function-pointer slots
+            let expected = 4 + 4 + 319 * PTR;
+            assert_eq!(
+                mem::size_of::<NV_ENCODE_API_FUNCTION_LIST>(),
+                expected,
+                "NV_ENCODE_API_FUNCTION_LIST size mismatch — SDK expects 319 fn-ptr slots"
+            );
+        }
+
+        // ── critical field offsets (must match NVENC SDK 12.2) ──
+
+        #[test]
+        fn offset_open_encode_session_ex() {
+            // Slot 30 → offset = 8 + 29 * PTR
+            let expected = 8 + 29 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncOpenEncodeSessionEx),
+                expected,
+                "nvEncOpenEncodeSessionEx must be at SDK slot 30"
+            );
+        }
+
+        #[test]
+        fn offset_encode_picture() {
+            // Slot 17 → offset = 8 + 16 * PTR
+            let expected = 8 + 16 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncEncodePicture),
+                expected,
+                "nvEncEncodePicture must be at SDK slot 17"
+            );
+        }
+
+        #[test]
+        fn offset_lock_bitstream() {
+            // Slot 18 → offset = 8 + 17 * PTR
+            let expected = 8 + 17 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncLockBitstream),
+                expected,
+                "nvEncLockBitstream must be at SDK slot 18"
+            );
+        }
+
+        #[test]
+        fn offset_unlock_bitstream() {
+            // Slot 19 → offset = 8 + 18 * PTR
+            let expected = 8 + 18 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnlockBitstream),
+                expected,
+                "nvEncUnlockBitstream must be at SDK slot 19"
+            );
+        }
+
+        #[test]
+        fn offset_map_input_resource() {
+            // Slot 26 → offset = 8 + 25 * PTR
+            let expected = 8 + 25 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncMapInputResource),
+                expected,
+                "nvEncMapInputResource must be at SDK slot 26"
+            );
+        }
+
+        #[test]
+        fn offset_unmap_input_resource() {
+            // Slot 27 → offset = 8 + 26 * PTR
+            let expected = 8 + 26 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnmapInputResource),
+                expected,
+                "nvEncUnmapInputResource must be at SDK slot 27"
+            );
+        }
+
+        #[test]
+        fn offset_destroy_encoder() {
+            // Slot 28 → offset = 8 + 27 * PTR
+            let expected = 8 + 27 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyEncoder),
+                expected,
+                "nvEncDestroyEncoder must be at SDK slot 28"
+            );
+        }
+
+        #[test]
+        fn offset_register_resource() {
+            // Slot 31 → offset = 8 + 30 * PTR
+            let expected = 8 + 30 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncRegisterResource),
+                expected,
+                "nvEncRegisterResource must be at SDK slot 31"
+            );
+        }
+
+        #[test]
+        fn offset_unregister_resource() {
+            // Slot 32 → offset = 8 + 31 * PTR
+            let expected = 8 + 31 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnregisterResource),
+                expected,
+                "nvEncUnregisterResource must be at SDK slot 32"
+            );
+        }
+
+        #[test]
+        fn offset_initialize_encoder() {
+            // Slot 12 → offset = 8 + 11 * PTR
+            let expected = 8 + 11 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncInitializeEncoder),
+                expected,
+                "nvEncInitializeEncoder must be at SDK slot 12"
+            );
+        }
+
+        #[test]
+        fn offset_create_bitstream_buffer() {
+            // Slot 15 → offset = 8 + 14 * PTR
+            let expected = 8 + 14 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncCreateBitstreamBuffer),
+                expected,
+                "nvEncCreateBitstreamBuffer must be at SDK slot 15"
+            );
+        }
+
+        #[test]
+        fn offset_destroy_bitstream_buffer() {
+            // Slot 16 → offset = 8 + 15 * PTR
+            let expected = 8 + 15 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyBitstreamBuffer),
+                expected,
+                "nvEncDestroyBitstreamBuffer must be at SDK slot 16"
+            );
+        }
+
+        #[test]
+        fn offset_get_encode_preset_config_ex() {
+            // Slot 40 → offset = 8 + 39 * PTR
+            let expected = 8 + 39 * PTR;
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodePresetConfigEx),
+                expected,
+                "nvEncGetEncodePresetConfigEx must be at SDK slot 40"
+            );
+        }
+
+        // ── version defaults ──
+
+        #[test]
+        fn function_list_version_default() {
+            let list = NV_ENCODE_API_FUNCTION_LIST::default();
+            assert_eq!(list.version, struct_ver::<NV_ENCODE_API_FUNCTION_LIST>(2));
+        }
+
+        #[test]
+        fn session_params_version_default() {
+            let params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
+            assert_eq!(
+                params.version,
+                struct_ver::<NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS>(1)
+            );
+            assert_eq!(params.apiVersion, NVENCAPI_VERSION);
+        }
+
+        #[test]
+        fn initialize_params_version_default() {
+            let params = NV_ENC_INITIALIZE_PARAMS::default();
+            assert_eq!(params.version, struct_ver::<NV_ENC_INITIALIZE_PARAMS>(5));
+        }
+
+        #[test]
+        fn config_version_default() {
+            let config = NV_ENC_CONFIG::default();
+            assert_eq!(config.version, struct_ver::<NV_ENC_CONFIG>(7));
+        }
+
+        #[test]
+        fn nvenc_status_strings() {
+            assert_eq!(nvenc_status_to_string(NV_ENC_SUCCESS), "NV_ENC_SUCCESS");
+            assert_eq!(
+                nvenc_status_to_string(NV_ENC_ERR_RESOURCE_REGISTER_FAILED),
+                "NV_ENC_ERR_RESOURCE_REGISTER_FAILED"
+            );
+            assert_eq!(nvenc_status_to_string(999), "UNKNOWN_NVENC_ERROR");
         }
     }
 }
