@@ -38,6 +38,7 @@ mod windows {
     use crate::{
         encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         nvenc_sys::{
+            H264_FLAG_REPEAT_SPS_PPS, HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT, HEVC_FLAG_REPEAT_SPS_PPS,
             NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_CONFIG, NV_ENC_CODEC_H264_GUID,
             NV_ENC_CODEC_HEVC_GUID, NV_ENC_CONFIG_H264, NV_ENC_CONFIG_HEVC,
             NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_H264_PROFILE_MAIN_GUID,
@@ -46,7 +47,8 @@ mod windows {
             NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS,
             NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE,
             NV_ENC_SUCCESS, NV_ENC_TUNING_INFO, NV_ENCODE_API_FUNCTION_LIST,
-            PFnNvEncodeAPICreateInstance, nvenc_status_to_string,
+            PFnNvEncodeAPICreateInstance, RC_FLAG_ENABLE_AQ, RC_FLAG_ZERO_REORDER_DELAY,
+            nvenc_status_to_string,
         },
         packet::EncodedPacket,
     };
@@ -211,31 +213,24 @@ mod windows {
             encode_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
             encode_config.rcParams.averageBitRate = config.resolved_bitrate();
             encode_config.rcParams.maxBitRate = config.resolved_bitrate() * 12 / 10; // 20% headroom
-            encode_config.rcParams.enableAQ = 1;
-            encode_config.rcParams.zeroReorderDelay = 1; // Essential for low latency
+            encode_config.rcParams.rc_flags = RC_FLAG_ENABLE_AQ | RC_FLAG_ZERO_REORDER_DELAY;
 
             // Codec-specific configuration
             match config.codec {
                 Codec::Hevc => {
-                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG {
-                        hevcConfig: NV_ENC_CONFIG_HEVC {
-                            repeatSPSPPS: 1,        // Include headers with every keyframe
-                            chromaFormatIDC: 1,     // YUV420
-                            pixelBitDepthMinus8: 0, // 8-bit
-                            ..Default::default()
-                        },
-                    };
+                    let mut hevc = NV_ENC_CONFIG_HEVC::default();
+                    hevc.hevc_flags =
+                        HEVC_FLAG_REPEAT_SPS_PPS | (1 << HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT); // chromaFormatIDC=1 (YUV420)
+                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG { hevcConfig: hevc };
                 }
                 Codec::H264 => {
-                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG {
-                        h264Config: NV_ENC_CONFIG_H264 {
-                            repeatSPSPPS: 1, // Include headers with every keyframe
-                            ..Default::default()
-                        },
-                    };
+                    let mut h264 = NV_ENC_CONFIG_H264::default();
+                    h264.h264_flags = H264_FLAG_REPEAT_SPS_PPS;
+                    encode_config.encodeCodecConfig = NV_ENC_CODEC_CONFIG { h264Config: h264 };
                 }
             }
 
+            init_params.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
             init_params.encodeConfig = &mut encode_config;
 
             // Initialize encoder
