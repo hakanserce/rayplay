@@ -20,9 +20,7 @@
 #[allow(
     clippy::cast_possible_truncation,
     clippy::field_reassign_with_default,
-    clippy::manual_c_str_construction,
-    clippy::ptr_as_ptr,
-    clippy::ref_as_ptr,
+    clippy::borrow_as_ptr,
     clippy::similar_names,
     clippy::too_many_lines
 )]
@@ -100,7 +98,7 @@ mod windows {
 
             // Load NVENC DLL dynamically
             let dll_handle = unsafe {
-                LoadLibraryA(PCSTR(b"nvEncodeAPI64.dll\0".as_ptr())).map_err(|e| {
+                LoadLibraryA(PCSTR(c"nvEncodeAPI64.dll".as_ptr().cast())).map_err(|e| {
                     VideoError::EncodingFailed {
                         reason: format!("Failed to load nvEncodeAPI64.dll: {e}"),
                     }
@@ -109,10 +107,13 @@ mod windows {
 
             // Get API creation function
             let create_instance_ptr = unsafe {
-                GetProcAddress(dll_handle, PCSTR(b"NvEncodeAPICreateInstance\0".as_ptr()))
-                    .ok_or_else(|| VideoError::EncodingFailed {
-                        reason: "NvEncodeAPICreateInstance not found in DLL".to_string(),
-                    })?
+                GetProcAddress(
+                    dll_handle,
+                    PCSTR(c"NvEncodeAPICreateInstance".as_ptr().cast()),
+                )
+                .ok_or_else(|| VideoError::EncodingFailed {
+                    reason: "NvEncodeAPICreateInstance not found in DLL".to_string(),
+                })?
             };
 
             let create_instance: PFnNvEncodeAPICreateInstance =
