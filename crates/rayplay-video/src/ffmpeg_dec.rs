@@ -301,10 +301,8 @@ mod tests {
         let mut dec = FfmpegDecoder::new(Codec::H264).unwrap();
         let packet = EncodedPacket::new(vec![0xFF; 64], false, 0, 16_667);
         let result = dec.decode(&packet);
-        match result {
-            Ok(None) => {}
-            Ok(Some(_)) => panic!("should not decode garbage into a frame"),
-            Err(_) => {}
+        if let Ok(Some(_)) = result {
+            panic!("should not decode garbage into a frame");
         }
     }
 
