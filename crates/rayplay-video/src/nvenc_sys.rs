@@ -960,12 +960,14 @@ pub(crate) mod ffi {
             });
         }
 
-        let mut params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
-        params.device = device_ptr;
-        params.deviceType = device_type;
+        let mut params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
+            device: device_ptr,
+            deviceType: device_type,
+            ..NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default()
+        };
 
         let mut encoder: *mut c_void = std::ptr::null_mut();
-        let status = unsafe { open_session_fn(&mut params, &mut encoder) };
+        let status = unsafe { open_session_fn(&raw mut params, &raw mut encoder) };
 
         if status != NV_ENC_SUCCESS {
             return Err(crate::encoder::VideoError::EncodingFailed {

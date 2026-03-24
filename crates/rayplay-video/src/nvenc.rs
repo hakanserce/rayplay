@@ -21,6 +21,7 @@
     clippy::cast_possible_truncation,
     clippy::field_reassign_with_default,
     clippy::borrow_as_ptr,
+    clippy::not_unsafe_ptr_arg_deref,
     clippy::similar_names,
     clippy::too_many_lines
 )]
