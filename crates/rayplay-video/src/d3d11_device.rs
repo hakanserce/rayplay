@@ -17,6 +17,7 @@ mod inner {
     use windows::Win32::Graphics::Direct3D11::{
         D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
     };
+    use windows::core::Interface as _;
 
     use crate::capture::CaptureError;
 
@@ -84,8 +85,7 @@ mod inner {
         /// The returned pointer is valid for the lifetime of this `SharedD3D11Device`.
         /// The caller must not dereference it after this struct is dropped.
         pub fn device_ptr(&self) -> *mut c_void {
-            let raw: *const ID3D11Device = &self.device;
-            raw.cast_mut().cast::<c_void>()
+            self.device.as_raw()
         }
     }
 }
