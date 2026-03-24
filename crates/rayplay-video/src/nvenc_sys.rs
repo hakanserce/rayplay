@@ -97,16 +97,31 @@ pub(crate) mod ffi {
     pub type NVENCSTATUS = u32;
     pub const NV_ENC_SUCCESS: NVENCSTATUS = 0;
     pub const NV_ENC_ERR_NO_ENCODE_DEVICE: NVENCSTATUS = 1;
-    pub const NV_ENC_ERR_UNSUPPORTED_PARAM: NVENCSTATUS = 2;
-    pub const NV_ENC_ERR_OUT_OF_MEMORY: NVENCSTATUS = 3;
-    pub const NV_ENC_ERR_INVALID_PARAM: NVENCSTATUS = 4;
-    pub const NV_ENC_ERR_INVALID_CALL: NVENCSTATUS = 5;
-    pub const NV_ENC_ERR_GENERIC: NVENCSTATUS = 6;
-    pub const NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY: NVENCSTATUS = 7;
-    pub const NV_ENC_ERR_UNIMPLEMENTED: NVENCSTATUS = 8;
-    pub const NV_ENC_ERR_RESOURCE_REGISTER_FAILED: NVENCSTATUS = 9;
-    pub const NV_ENC_ERR_RESOURCE_NOT_REGISTERED: NVENCSTATUS = 10;
-    pub const NV_ENC_ERR_RESOURCE_NOT_MAPPED: NVENCSTATUS = 11;
+    pub const NV_ENC_ERR_UNSUPPORTED_DEVICE: NVENCSTATUS = 2;
+    pub const NV_ENC_ERR_INVALID_ENCODERDEVICE: NVENCSTATUS = 3;
+    pub const NV_ENC_ERR_INVALID_DEVICE: NVENCSTATUS = 4;
+    pub const NV_ENC_ERR_DEVICE_NOT_EXIST: NVENCSTATUS = 5;
+    pub const NV_ENC_ERR_INVALID_PTR: NVENCSTATUS = 6;
+    pub const NV_ENC_ERR_INVALID_EVENT: NVENCSTATUS = 7;
+    pub const NV_ENC_ERR_INVALID_PARAM: NVENCSTATUS = 8;
+    pub const NV_ENC_ERR_INVALID_CALL: NVENCSTATUS = 9;
+    pub const NV_ENC_ERR_OUT_OF_MEMORY: NVENCSTATUS = 10;
+    pub const NV_ENC_ERR_ENCODER_NOT_INITIALIZED: NVENCSTATUS = 11;
+    pub const NV_ENC_ERR_UNSUPPORTED_PARAM: NVENCSTATUS = 12;
+    pub const NV_ENC_ERR_LOCK_BUSY: NVENCSTATUS = 13;
+    pub const NV_ENC_ERR_NOT_ENOUGH_BUFFER: NVENCSTATUS = 14;
+    pub const NV_ENC_ERR_INVALID_VERSION: NVENCSTATUS = 15;
+    pub const NV_ENC_ERR_MAP_FAILED: NVENCSTATUS = 16;
+    pub const NV_ENC_ERR_NEED_MORE_INPUT: NVENCSTATUS = 17;
+    pub const NV_ENC_ERR_ENCODER_BUSY: NVENCSTATUS = 18;
+    pub const NV_ENC_ERR_EVENT_NOT_REGISTERD: NVENCSTATUS = 19;
+    pub const NV_ENC_ERR_GENERIC: NVENCSTATUS = 20;
+    pub const NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY: NVENCSTATUS = 21;
+    pub const NV_ENC_ERR_UNIMPLEMENTED: NVENCSTATUS = 22;
+    pub const NV_ENC_ERR_RESOURCE_REGISTER_FAILED: NVENCSTATUS = 23;
+    pub const NV_ENC_ERR_RESOURCE_NOT_REGISTERED: NVENCSTATUS = 24;
+    pub const NV_ENC_ERR_RESOURCE_NOT_MAPPED: NVENCSTATUS = 25;
+    pub const NV_ENC_ERR_NEED_MORE_OUTPUT: NVENCSTATUS = 26;
 
     // ── Enums (all u32) ──
 
@@ -816,6 +831,9 @@ pub(crate) mod ffi {
 
     pub type PFnNvEncDestroyEncoder = unsafe extern "C" fn(encoder: *mut c_void) -> NVENCSTATUS;
 
+    pub type PFnNvEncGetLastErrorString =
+        unsafe extern "C" fn(encoder: *mut c_void) -> *const std::ffi::c_char;
+
     pub type PFnNvEncGetEncodePresetConfigEx = unsafe extern "C" fn(
         encoder: *mut c_void,
         encode_guid: GUID,
@@ -824,55 +842,56 @@ pub(crate) mod ffi {
         preset_config: *mut NV_ENC_PRESET_CONFIG,
     ) -> NVENCSTATUS;
 
-    // ── Function list (SDK 12.2, 319 fn-ptr slots) ──
+    // ── Function list (SDK 12.2, 318 fn-ptr slots) ──
 
     #[repr(C)]
     pub struct NV_ENCODE_API_FUNCTION_LIST {
         pub version: u32,
         pub reserved: u32,
-        pub _nvEncOpenEncodeSession: *mut c_void,
-        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>,
-        pub _nvEncGetEncodeCaps: *mut c_void,
-        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>,
-        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>,
-        pub _nvEncGetEncodePresetConfig: *mut c_void,
-        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>,
-        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>,
-        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>,
-        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>,
-        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>,
-        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>,
-        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>,
-        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>,
-        pub _nvEncLockInputBuffer: *mut c_void,
-        pub _nvEncUnlockInputBuffer: *mut c_void,
-        pub _nvEncGetEncodeStats: *mut c_void,
-        pub _nvEncGetSequenceParams: *mut c_void,
-        pub _nvEncRegisterAsyncEvent: *mut c_void,
-        pub _nvEncUnregisterAsyncEvent: *mut c_void,
-        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>,
-        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>,
-        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>,
-        pub _nvEncInvalidateRefFrames: *mut c_void,
-        pub nvEncOpenEncodeSessionEx: Option<PFnNvEncOpenEncodeSessionEx>,
-        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>,
-        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>,
-        pub _nvEncReconfigureEncoder: *mut c_void,
-        pub _reserved1: *mut c_void,
-        pub _nvEncCreateMVBuffer: *mut c_void,
-        pub _nvEncDestroyMVBuffer: *mut c_void,
-        pub _nvEncRunMotionEstimationOnly: *mut c_void,
-        pub _nvEncGetLastErrorString: *mut c_void,
-        pub _nvEncSetIOCudaStreams: *mut c_void,
-        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>,
-        pub _nvEncGetSequenceParamEx: *mut c_void,
-        pub _nvEncLookaheadPicture: *mut c_void,
-        pub _reserved2: [*mut c_void; 277],
+        pub _nvEncOpenEncodeSession: *mut c_void, // slot 0
+        pub nvEncGetEncodeGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot 1
+        pub nvEncGetEncodeProfileGUIDCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot 2
+        pub nvEncGetEncodeProfileGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot 3
+        pub nvEncGetEncodeGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot 4
+        pub nvEncGetInputFormatCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot 5
+        pub nvEncGetInputFormats: Option<PFnNvEncGetEncodeGUIDs>, // slot 6
+        pub _nvEncGetEncodeCaps: *mut c_void,     // slot 7
+        pub nvEncGetEncodePresetCount: Option<PFnNvEncGetEncodeGUIDCount>, // slot 8
+        pub nvEncGetEncodePresetGUIDs: Option<PFnNvEncGetEncodeGUIDs>, // slot 9
+        pub _nvEncGetEncodePresetConfig: *mut c_void, // slot 10
+        pub nvEncInitializeEncoder: Option<PFnNvEncInitializeEncoder>, // slot 11
+        pub nvEncCreateInputBuffer: Option<PFnNvEncCreateInputBuffer>, // slot 12
+        pub nvEncDestroyInputBuffer: Option<PFnNvEncDestroyInputBuffer>, // slot 13
+        pub nvEncCreateBitstreamBuffer: Option<PFnNvEncCreateBitstreamBuffer>, // slot 14
+        pub nvEncDestroyBitstreamBuffer: Option<PFnNvEncDestroyBitstreamBuffer>, // slot 15
+        pub nvEncEncodePicture: Option<PFnNvEncEncodePicture>, // slot 16
+        pub nvEncLockBitstream: Option<PFnNvEncLockBitstream>, // slot 17
+        pub nvEncUnlockBitstream: Option<PFnNvEncUnlockBitstream>, // slot 18
+        pub _nvEncLockInputBuffer: *mut c_void,   // slot 19
+        pub _nvEncUnlockInputBuffer: *mut c_void, // slot 20
+        pub _nvEncGetEncodeStats: *mut c_void,    // slot 21
+        pub _nvEncGetSequenceParams: *mut c_void, // slot 22
+        pub _nvEncRegisterAsyncEvent: *mut c_void, // slot 23
+        pub _nvEncUnregisterAsyncEvent: *mut c_void, // slot 24
+        pub nvEncMapInputResource: Option<PFnNvEncMapInputResource>, // slot 25
+        pub nvEncUnmapInputResource: Option<PFnNvEncUnmapInputResource>, // slot 26
+        pub nvEncDestroyEncoder: Option<PFnNvEncDestroyEncoder>, // slot 27
+        pub _nvEncInvalidateRefFrames: *mut c_void, // slot 28
+        pub nvEncOpenEncodeSessionEx: Option<PFnNvEncOpenEncodeSessionEx>, // slot 29
+        pub nvEncRegisterResource: Option<PFnNvEncRegisterResource>, // slot 30
+        pub nvEncUnregisterResource: Option<PFnNvEncUnregisterResource>, // slot 31
+        pub _nvEncReconfigureEncoder: *mut c_void, // slot 32
+        pub _reserved1: *mut c_void,              // slot 33
+        pub _nvEncCreateMVBuffer: *mut c_void,    // slot 34
+        pub _nvEncDestroyMVBuffer: *mut c_void,   // slot 35
+        pub _nvEncRunMotionEstimationOnly: *mut c_void, // slot 36
+        pub nvEncGetLastErrorString: Option<PFnNvEncGetLastErrorString>, // slot 37
+        pub _nvEncSetIOCudaStreams: *mut c_void,  // slot 38
+        pub nvEncGetEncodePresetConfigEx: Option<PFnNvEncGetEncodePresetConfigEx>, // slot 39
+        pub _nvEncGetSequenceParamEx: *mut c_void, // slot 40
+        pub _nvEncRestoreEncoderState: *mut c_void, // slot 41
+        pub _nvEncLookaheadPicture: *mut c_void,  // slot 42
+        pub _reserved2: [*mut c_void; 275],
     }
 
     impl Default for NV_ENCODE_API_FUNCTION_LIST {
@@ -888,21 +907,38 @@ pub(crate) mod ffi {
         unsafe extern "C" fn(function_list: *mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
 
     /// Converts NVENC status code to human-readable string.
-    pub fn nvenc_status_to_string(status: NVENCSTATUS) -> &'static str {
+    pub fn nvenc_status_to_string(status: NVENCSTATUS) -> String {
         match status {
-            NV_ENC_SUCCESS => "NV_ENC_SUCCESS",
-            NV_ENC_ERR_NO_ENCODE_DEVICE => "NV_ENC_ERR_NO_ENCODE_DEVICE",
-            NV_ENC_ERR_UNSUPPORTED_PARAM => "NV_ENC_ERR_UNSUPPORTED_PARAM",
-            NV_ENC_ERR_OUT_OF_MEMORY => "NV_ENC_ERR_OUT_OF_MEMORY",
-            NV_ENC_ERR_INVALID_PARAM => "NV_ENC_ERR_INVALID_PARAM",
-            NV_ENC_ERR_INVALID_CALL => "NV_ENC_ERR_INVALID_CALL",
-            NV_ENC_ERR_GENERIC => "NV_ENC_ERR_GENERIC",
-            NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY => "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY",
-            NV_ENC_ERR_UNIMPLEMENTED => "NV_ENC_ERR_UNIMPLEMENTED",
-            NV_ENC_ERR_RESOURCE_REGISTER_FAILED => "NV_ENC_ERR_RESOURCE_REGISTER_FAILED",
-            NV_ENC_ERR_RESOURCE_NOT_REGISTERED => "NV_ENC_ERR_RESOURCE_NOT_REGISTERED",
-            NV_ENC_ERR_RESOURCE_NOT_MAPPED => "NV_ENC_ERR_RESOURCE_NOT_MAPPED",
-            _ => "UNKNOWN_NVENC_ERROR",
+            NV_ENC_SUCCESS => "NV_ENC_SUCCESS".to_string(),
+            NV_ENC_ERR_NO_ENCODE_DEVICE => "NV_ENC_ERR_NO_ENCODE_DEVICE".to_string(),
+            NV_ENC_ERR_UNSUPPORTED_DEVICE => "NV_ENC_ERR_UNSUPPORTED_DEVICE".to_string(),
+            NV_ENC_ERR_INVALID_ENCODERDEVICE => "NV_ENC_ERR_INVALID_ENCODERDEVICE".to_string(),
+            NV_ENC_ERR_INVALID_DEVICE => "NV_ENC_ERR_INVALID_DEVICE".to_string(),
+            NV_ENC_ERR_DEVICE_NOT_EXIST => "NV_ENC_ERR_DEVICE_NOT_EXIST".to_string(),
+            NV_ENC_ERR_INVALID_PTR => "NV_ENC_ERR_INVALID_PTR".to_string(),
+            NV_ENC_ERR_INVALID_EVENT => "NV_ENC_ERR_INVALID_EVENT".to_string(),
+            NV_ENC_ERR_INVALID_PARAM => "NV_ENC_ERR_INVALID_PARAM".to_string(),
+            NV_ENC_ERR_INVALID_CALL => "NV_ENC_ERR_INVALID_CALL".to_string(),
+            NV_ENC_ERR_OUT_OF_MEMORY => "NV_ENC_ERR_OUT_OF_MEMORY".to_string(),
+            NV_ENC_ERR_ENCODER_NOT_INITIALIZED => "NV_ENC_ERR_ENCODER_NOT_INITIALIZED".to_string(),
+            NV_ENC_ERR_UNSUPPORTED_PARAM => "NV_ENC_ERR_UNSUPPORTED_PARAM".to_string(),
+            NV_ENC_ERR_LOCK_BUSY => "NV_ENC_ERR_LOCK_BUSY".to_string(),
+            NV_ENC_ERR_NOT_ENOUGH_BUFFER => "NV_ENC_ERR_NOT_ENOUGH_BUFFER".to_string(),
+            NV_ENC_ERR_INVALID_VERSION => "NV_ENC_ERR_INVALID_VERSION".to_string(),
+            NV_ENC_ERR_MAP_FAILED => "NV_ENC_ERR_MAP_FAILED".to_string(),
+            NV_ENC_ERR_NEED_MORE_INPUT => "NV_ENC_ERR_NEED_MORE_INPUT".to_string(),
+            NV_ENC_ERR_ENCODER_BUSY => "NV_ENC_ERR_ENCODER_BUSY".to_string(),
+            NV_ENC_ERR_EVENT_NOT_REGISTERD => "NV_ENC_ERR_EVENT_NOT_REGISTERD".to_string(),
+            NV_ENC_ERR_GENERIC => "NV_ENC_ERR_GENERIC".to_string(),
+            NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY => "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY".to_string(),
+            NV_ENC_ERR_UNIMPLEMENTED => "NV_ENC_ERR_UNIMPLEMENTED".to_string(),
+            NV_ENC_ERR_RESOURCE_REGISTER_FAILED => {
+                "NV_ENC_ERR_RESOURCE_REGISTER_FAILED".to_string()
+            }
+            NV_ENC_ERR_RESOURCE_NOT_REGISTERED => "NV_ENC_ERR_RESOURCE_NOT_REGISTERED".to_string(),
+            NV_ENC_ERR_RESOURCE_NOT_MAPPED => "NV_ENC_ERR_RESOURCE_NOT_MAPPED".to_string(),
+            NV_ENC_ERR_NEED_MORE_OUTPUT => "NV_ENC_ERR_NEED_MORE_OUTPUT".to_string(),
+            _ => format!("UNKNOWN_NVENC_ERROR (code {status})"),
         }
     }
 
@@ -1056,7 +1092,10 @@ pub(crate) mod ffi {
                 nvenc_status_to_string(NV_ENC_ERR_RESOURCE_REGISTER_FAILED),
                 "NV_ENC_ERR_RESOURCE_REGISTER_FAILED"
             );
-            assert_eq!(nvenc_status_to_string(999), "UNKNOWN_NVENC_ERROR");
+            assert_eq!(
+                nvenc_status_to_string(999),
+                "UNKNOWN_NVENC_ERROR (code 999)"
+            );
         }
 
         // ── Struct configuration API (mirrors how nvenc.rs should use them) ──
@@ -1111,7 +1150,7 @@ pub(crate) mod ffi {
 
         #[test]
         fn function_list_total_size() {
-            let expected = 4 + 4 + 319 * PTR;
+            let expected = 4 + 4 + 318 * PTR;
             assert_eq!(mem::size_of::<NV_ENCODE_API_FUNCTION_LIST>(), expected);
         }
 
@@ -1217,6 +1256,162 @@ pub(crate) mod ffi {
                 mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodePresetConfigEx),
                 8 + 39 * PTR
             );
+        }
+
+        // ── New tests for status code fix ──
+
+        #[test]
+        fn status_code_values_match_sdk() {
+            assert_eq!(NV_ENC_SUCCESS, 0);
+            assert_eq!(NV_ENC_ERR_NO_ENCODE_DEVICE, 1);
+            assert_eq!(NV_ENC_ERR_UNSUPPORTED_DEVICE, 2);
+            assert_eq!(NV_ENC_ERR_INVALID_ENCODERDEVICE, 3);
+            assert_eq!(NV_ENC_ERR_INVALID_DEVICE, 4);
+            assert_eq!(NV_ENC_ERR_DEVICE_NOT_EXIST, 5);
+            assert_eq!(NV_ENC_ERR_INVALID_PTR, 6);
+            assert_eq!(NV_ENC_ERR_INVALID_EVENT, 7);
+            assert_eq!(NV_ENC_ERR_INVALID_PARAM, 8);
+            assert_eq!(NV_ENC_ERR_INVALID_CALL, 9);
+            assert_eq!(NV_ENC_ERR_OUT_OF_MEMORY, 10);
+            assert_eq!(NV_ENC_ERR_ENCODER_NOT_INITIALIZED, 11);
+            assert_eq!(NV_ENC_ERR_UNSUPPORTED_PARAM, 12);
+            assert_eq!(NV_ENC_ERR_LOCK_BUSY, 13);
+            assert_eq!(NV_ENC_ERR_NOT_ENOUGH_BUFFER, 14);
+            assert_eq!(NV_ENC_ERR_INVALID_VERSION, 15);
+            assert_eq!(NV_ENC_ERR_MAP_FAILED, 16);
+            assert_eq!(NV_ENC_ERR_NEED_MORE_INPUT, 17);
+            assert_eq!(NV_ENC_ERR_ENCODER_BUSY, 18);
+            assert_eq!(NV_ENC_ERR_EVENT_NOT_REGISTERD, 19);
+            assert_eq!(NV_ENC_ERR_GENERIC, 20);
+            assert_eq!(NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY, 21);
+            assert_eq!(NV_ENC_ERR_UNIMPLEMENTED, 22);
+            assert_eq!(NV_ENC_ERR_RESOURCE_REGISTER_FAILED, 23);
+            assert_eq!(NV_ENC_ERR_RESOURCE_NOT_REGISTERED, 24);
+            assert_eq!(NV_ENC_ERR_RESOURCE_NOT_MAPPED, 25);
+            assert_eq!(NV_ENC_ERR_NEED_MORE_OUTPUT, 26);
+        }
+
+        #[test]
+        fn status_to_string_returns_correct_name_for_every_sdk_code() {
+            let expected: &[(u32, &str)] = &[
+                (0, "NV_ENC_SUCCESS"),
+                (1, "NV_ENC_ERR_NO_ENCODE_DEVICE"),
+                (2, "NV_ENC_ERR_UNSUPPORTED_DEVICE"),
+                (3, "NV_ENC_ERR_INVALID_ENCODERDEVICE"),
+                (4, "NV_ENC_ERR_INVALID_DEVICE"),
+                (5, "NV_ENC_ERR_DEVICE_NOT_EXIST"),
+                (6, "NV_ENC_ERR_INVALID_PTR"),
+                (7, "NV_ENC_ERR_INVALID_EVENT"),
+                (8, "NV_ENC_ERR_INVALID_PARAM"),
+                (9, "NV_ENC_ERR_INVALID_CALL"),
+                (10, "NV_ENC_ERR_OUT_OF_MEMORY"),
+                (11, "NV_ENC_ERR_ENCODER_NOT_INITIALIZED"),
+                (12, "NV_ENC_ERR_UNSUPPORTED_PARAM"),
+                (13, "NV_ENC_ERR_LOCK_BUSY"),
+                (14, "NV_ENC_ERR_NOT_ENOUGH_BUFFER"),
+                (15, "NV_ENC_ERR_INVALID_VERSION"),
+                (16, "NV_ENC_ERR_MAP_FAILED"),
+                (17, "NV_ENC_ERR_NEED_MORE_INPUT"),
+                (18, "NV_ENC_ERR_ENCODER_BUSY"),
+                (19, "NV_ENC_ERR_EVENT_NOT_REGISTERD"),
+                (20, "NV_ENC_ERR_GENERIC"),
+                (21, "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY"),
+                (22, "NV_ENC_ERR_UNIMPLEMENTED"),
+                (23, "NV_ENC_ERR_RESOURCE_REGISTER_FAILED"),
+                (24, "NV_ENC_ERR_RESOURCE_NOT_REGISTERED"),
+                (25, "NV_ENC_ERR_RESOURCE_NOT_MAPPED"),
+                (26, "NV_ENC_ERR_NEED_MORE_OUTPUT"),
+            ];
+            for &(code, name) in expected {
+                assert_eq!(
+                    nvenc_status_to_string(code),
+                    name,
+                    "mismatch for code {code}"
+                );
+            }
+        }
+
+        #[test]
+        fn all_sdk_status_codes_are_recognized() {
+            for code in 0..=26u32 {
+                let s = nvenc_status_to_string(code);
+                assert!(
+                    !s.contains("UNKNOWN"),
+                    "SDK code {code} fell through to UNKNOWN: {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn status_to_string_unknown_code_includes_numeric_value() {
+            let s = nvenc_status_to_string(999);
+            assert!(
+                s.contains("999"),
+                "unknown code should include numeric value: {s}"
+            );
+            assert!(
+                s.contains("UNKNOWN"),
+                "unknown code should contain UNKNOWN: {s}"
+            );
+        }
+
+        #[test]
+        fn offset_restore_encoder_state() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, _nvEncRestoreEncoderState),
+                8 + 41 * PTR
+            );
+        }
+
+        #[test]
+        fn offset_get_last_error_string() {
+            assert_eq!(
+                mem::offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetLastErrorString),
+                8 + 37 * PTR
+            );
+        }
+
+        // ── E2E error-path test (proves the bug exists) ──
+
+        #[test]
+        fn nvenc_error_chain_reports_real_error_name() {
+            // These are the error codes nvEncOpenEncodeSessionEx can return
+            // (SDK docs, nvEncodeAPI.h lines 2852-2858)
+            let session_open_errors: &[(u32, &str)] = &[
+                (6, "NV_ENC_ERR_INVALID_PTR"),
+                (3, "NV_ENC_ERR_INVALID_ENCODERDEVICE"),
+                (5, "NV_ENC_ERR_DEVICE_NOT_EXIST"),
+                (12, "NV_ENC_ERR_UNSUPPORTED_PARAM"),
+                (10, "NV_ENC_ERR_OUT_OF_MEMORY"),
+                (8, "NV_ENC_ERR_INVALID_PARAM"),
+                (20, "NV_ENC_ERR_GENERIC"),
+                (15, "NV_ENC_ERR_INVALID_VERSION"),
+            ];
+
+            for &(code, expected_name) in session_open_errors {
+                let status_str = nvenc_status_to_string(code);
+                assert!(
+                    !status_str.contains("UNKNOWN"),
+                    "SDK status code {code} reported as UNKNOWN — error chain is broken"
+                );
+                assert_eq!(
+                    status_str, expected_name,
+                    "code {code}: expected '{expected_name}', got '{status_str}'"
+                );
+                // Simulate the format! pattern from nvenc.rs line 151-154
+                let error_msg = format!(
+                    "nvEncOpenEncodeSession failed: {} (status={})",
+                    status_str, code
+                );
+                assert!(
+                    error_msg.contains(expected_name),
+                    "error msg missing name for code {code}"
+                );
+                assert!(
+                    error_msg.contains(&format!("status={code}")),
+                    "error msg missing raw code {code}"
+                );
+            }
         }
     }
 }
