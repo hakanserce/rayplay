@@ -113,7 +113,7 @@ fn bench_nvenc_zero_copy(c: &mut Criterion, label: &str, width: u32, height: u32
     };
     let capturer = DxgiCapture::new(cap_config, device.clone()).expect("DXGI capture");
     let enc_config = EncoderConfig::new(width, height, 60);
-    let mut encoder = NvencEncoder::new(enc_config).expect("NVENC encoder");
+    let mut encoder = NvencEncoder::new(enc_config, device.device_ptr()).expect("NVENC encoder");
 
     c.bench_function(label, |b| {
         b.iter(|| {

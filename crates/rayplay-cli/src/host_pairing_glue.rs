@@ -121,7 +121,8 @@ async fn stream_windows_zero_copy(
 
     let enc_config = EncoderConfig::new(cap_width, cap_height, config.encoder_config.fps)
         .with_bitrate(config.encoder_config.bitrate);
-    let encoder = NvencEncoder::new(enc_config).map_err(anyhow::Error::from)?;
+    let encoder =
+        NvencEncoder::new(enc_config, device.device_ptr()).map_err(anyhow::Error::from)?;
 
     let actual_codec = encoder.config().codec;
     let stream_params = StreamParams {
