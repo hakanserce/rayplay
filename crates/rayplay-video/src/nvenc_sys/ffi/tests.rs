@@ -825,3 +825,201 @@ fn test_e2e_preset_config_rejects_undefined_tuning_info() {
     };
     assert_eq!(status, NV_ENC_ERR_INVALID_PARAM);
 }
+
+// ── NV_ENC_BUFFER_FORMAT values must match SDK 12.2 nvEncodeAPI.h ──
+
+#[test]
+fn buffer_format_values_match_sdk_12_2() {
+    // Values from nvEncodeAPI.h lines 379-407 (SDK 12.2)
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED as u32,
+        0x00000000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12 as u32,
+        0x00000001
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_YV12 as u32,
+        0x00000010
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_IYUV as u32,
+        0x00000100
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_YUV444 as u32,
+        0x00001000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_YUV420_10BIT as u32,
+        0x00010000,
+        "YUV420_10BIT must be 0x00010000 per SDK 12.2, not 0x01000000"
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_YUV444_10BIT as u32,
+        0x00100000,
+        "YUV444_10BIT (0x00100000) must exist per SDK 12.2"
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB as u32,
+        0x01000000,
+        "ARGB must be 0x01000000 per SDK 12.2, not 0x02000000"
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB10 as u32,
+        0x02000000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_AYUV as u32,
+        0x04000000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR as u32,
+        0x10000000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ABGR10 as u32,
+        0x20000000
+    );
+    assert_eq!(
+        NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_U8 as u32,
+        0x40000000,
+        "U8 (0x40000000) must exist per SDK 12.2"
+    );
+}
+
+// ── NV_ENC_BUFFER_USAGE constants must match SDK 12.2 ──
+
+#[test]
+fn buffer_usage_constants_match_sdk_12_2() {
+    // SDK 12.2 nvEncodeAPI.h lines 777-784
+    assert_eq!(NV_ENC_INPUT_IMAGE, 0x0, "NV_ENC_INPUT_IMAGE must be 0x0");
+    assert_eq!(NV_ENC_OUTPUT_MOTION_VECTOR, 0x1);
+    assert_eq!(NV_ENC_OUTPUT_BITSTREAM, 0x2);
+    assert_eq!(NV_ENC_OUTPUT_RECON, 0x4);
+}
+
+#[test]
+fn register_resource_default_buffer_usage_is_input_image() {
+    let res = NV_ENC_REGISTER_RESOURCE::default();
+    assert_eq!(
+        res.bufferUsage, NV_ENC_INPUT_IMAGE,
+        "default bufferUsage must be NV_ENC_INPUT_IMAGE (0x0), not 1"
+    );
+}
+
+// ── E2E mock test for nvEncRegisterResource ──
+
+/// Mock that validates `NV_ENC_REGISTER_RESOURCE` fields like a real SDK 12.2 driver.
+unsafe extern "system" fn mock_register_resource(
+    _encoder: *mut c_void,
+    params: *mut NV_ENC_REGISTER_RESOURCE,
+) -> NVENCSTATUS {
+    let p = unsafe { &mut *params };
+
+    // Validate struct version
+    if p.version != nvencapi_struct_version(5) {
+        return NV_ENC_ERR_INVALID_VERSION;
+    }
+
+    // Validate buffer format is a known SDK 12.2 value
+    let valid_formats: &[u32] = &[
+        0x00000001, // NV12
+        0x00000010, // YV12
+        0x00000100, // IYUV
+        0x00001000, // YUV444
+        0x00010000, // YUV420_10BIT
+        0x00100000, // YUV444_10BIT
+        0x01000000, // ARGB
+        0x02000000, // ARGB10
+        0x04000000, // AYUV
+        0x10000000, // ABGR
+        0x20000000, // ABGR10
+        0x40000000, // U8
+    ];
+    if !valid_formats.contains(&(p.bufferFormat as u32)) {
+        return NV_ENC_ERR_UNIMPLEMENTED;
+    }
+
+    // Validate bufferUsage is a known value
+    if p.bufferUsage > 0x4 {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+
+    // Validate resource type
+    if p.resourceType != NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX
+        && p.resourceType != NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR
+        && p.resourceType != NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY
+        && p.resourceType != NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_OPENGL_TEX
+    {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
+
+    // Simulate successful registration
+    p.registeredResource = 0xABCD_0001 as *mut c_void;
+    NV_ENC_SUCCESS
+}
+
+#[test]
+#[allow(clippy::field_reassign_with_default)]
+fn test_e2e_register_resource_with_argb_format_succeeds() {
+    let mut params = NV_ENC_REGISTER_RESOURCE::default();
+    params.resourceType = NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+    params.width = 1920;
+    params.height = 1080;
+    params.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+    params.bufferUsage = NV_ENC_INPUT_IMAGE;
+
+    let status = unsafe { mock_register_resource(0xBEEF as *mut c_void, &raw mut params) };
+    assert_eq!(
+        status,
+        NV_ENC_SUCCESS,
+        "register with ARGB format should succeed, got {} (status={})",
+        nvenc_status_to_string(status),
+        status
+    );
+}
+
+#[test]
+#[allow(clippy::field_reassign_with_default)]
+fn test_e2e_register_resource_rejects_invalid_buffer_format() {
+    let mut params = NV_ENC_REGISTER_RESOURCE::default();
+    params.resourceType = NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+    params.width = 1920;
+    params.height = 1080;
+    // Write an invalid buffer format value (0x08000000) directly into the field's memory
+    // to simulate what a buggy caller would send to the driver.
+    unsafe {
+        let fmt_ptr: *mut u32 = std::ptr::addr_of_mut!(params.bufferFormat).cast();
+        fmt_ptr.write(0x08000000);
+    }
+    params.bufferUsage = NV_ENC_INPUT_IMAGE;
+
+    let status = unsafe { mock_register_resource(0xBEEF as *mut c_void, &raw mut params) };
+    assert_eq!(
+        status, NV_ENC_ERR_UNIMPLEMENTED,
+        "invalid buffer format should be rejected with UNIMPLEMENTED"
+    );
+}
+
+#[test]
+#[allow(clippy::field_reassign_with_default)]
+fn test_e2e_register_resource_default_params_succeed() {
+    // Verify that the Default impl produces params that a real driver would accept
+    // (after setting required fields: width, height, bufferFormat, resource ptr)
+    let mut params = NV_ENC_REGISTER_RESOURCE::default();
+    params.width = 1920;
+    params.height = 1080;
+    params.resourceToRegister = 0xDEAD as *mut c_void;
+    params.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+
+    let status = unsafe { mock_register_resource(0xBEEF as *mut c_void, &raw mut params) };
+    assert_eq!(
+        status,
+        NV_ENC_SUCCESS,
+        "default params with ARGB should succeed, got {} (status={})",
+        nvenc_status_to_string(status),
+        status
+    );
+}

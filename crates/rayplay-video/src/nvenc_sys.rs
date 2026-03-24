@@ -160,12 +160,14 @@ pub(crate) mod ffi {
         NV_ENC_BUFFER_FORMAT_YV12 = 0x00000010,
         NV_ENC_BUFFER_FORMAT_IYUV = 0x00000100,
         NV_ENC_BUFFER_FORMAT_YUV444 = 0x00001000,
-        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 0x01000000,
-        NV_ENC_BUFFER_FORMAT_ARGB = 0x02000000,
-        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x04000000,
-        NV_ENC_BUFFER_FORMAT_AYUV = 0x08000000,
+        NV_ENC_BUFFER_FORMAT_YUV420_10BIT = 0x00010000,
+        NV_ENC_BUFFER_FORMAT_YUV444_10BIT = 0x00100000,
+        NV_ENC_BUFFER_FORMAT_ARGB = 0x01000000,
+        NV_ENC_BUFFER_FORMAT_ARGB10 = 0x02000000,
+        NV_ENC_BUFFER_FORMAT_AYUV = 0x04000000,
         NV_ENC_BUFFER_FORMAT_ABGR = 0x10000000,
         NV_ENC_BUFFER_FORMAT_ABGR10 = 0x20000000,
+        NV_ENC_BUFFER_FORMAT_U8 = 0x40000000,
     }
 
     #[repr(u32)]
@@ -212,6 +214,13 @@ pub(crate) mod ffi {
     pub const NV_ENC_PIC_FLAG_FORCEIDR: u32 = 0x2;
     pub const NV_ENC_PIC_FLAG_OUTPUT_SPSPPS: u32 = 0x4;
     pub const NV_ENC_PIC_FLAG_EOS: u32 = 0x8;
+
+    // ── Buffer usage (NV_ENC_BUFFER_USAGE) ──
+
+    pub const NV_ENC_INPUT_IMAGE: u32 = 0x0;
+    pub const NV_ENC_OUTPUT_MOTION_VECTOR: u32 = 0x1;
+    pub const NV_ENC_OUTPUT_BITSTREAM: u32 = 0x2;
+    pub const NV_ENC_OUTPUT_RECON: u32 = 0x4;
 
     // Rate control modes
     pub const NV_ENC_PARAMS_RC_CONSTQP: u32 = 0x0;
@@ -571,7 +580,7 @@ pub(crate) mod ffi {
             s.version = nvencapi_struct_version(5);
             s.resourceType = NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
             s.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_UNDEFINED;
-            s.bufferUsage = 1; // NV_ENC_INPUT_IMAGE
+            s.bufferUsage = NV_ENC_INPUT_IMAGE;
             s
         }
     }
