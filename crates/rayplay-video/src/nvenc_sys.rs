@@ -7,9 +7,15 @@
 #[allow(
     non_camel_case_types,
     non_snake_case,
+    clippy::enum_variant_names,
     clippy::missing_safety_doc,
+    clippy::module_name_repetitions,
     clippy::pub_underscore_fields,
+    clippy::similar_names,
+    clippy::struct_field_names,
     clippy::unreadable_literal,
+    clippy::upper_case_acronyms,
+    clippy::cast_possible_truncation,
     dead_code
 )]
 pub(crate) mod ffi {

@@ -17,6 +17,15 @@
 ///                                            FrameChunker → UDP
 /// ```
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::field_reassign_with_default,
+    clippy::manual_c_str_construction,
+    clippy::ptr_as_ptr,
+    clippy::ref_as_ptr,
+    clippy::similar_names,
+    clippy::too_many_lines
+)]
 mod windows {
     use std::{collections::HashMap, ffi::c_void, mem, ptr};
 
@@ -409,7 +418,7 @@ mod windows {
             pic_params.frameIdx = self.frame_index as u32;
 
             // Force IDR keyframes every GOP length
-            if self.frame_index % 60 == 0 {
+            if self.frame_index.is_multiple_of(60) {
                 pic_params.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
             }
 
@@ -497,10 +506,10 @@ mod windows {
             }
 
             // Determine frame type
-            let is_keyframe = match lock_params.pictureType {
-                NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_I | NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_IDR => true,
-                _ => false,
-            };
+            let is_keyframe = matches!(
+                lock_params.pictureType,
+                NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_I | NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_IDR
+            );
 
             // Calculate frame duration from FPS
             let duration_us = 1_000_000 / u64::from(self.config.fps);
