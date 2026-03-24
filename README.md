@@ -1,5 +1,12 @@
 # 🎮 RayPlay
 
+[![CI](https://github.com/hakanserce/rayplay/actions/workflows/ci.yml/badge.svg)](https://github.com/hakanserce/rayplay/actions/workflows/ci.yml)
+![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+
+> **Alpha — not yet feature-complete or production-ready.** Core video streaming
+> works end-to-end; audio, full input relay, and auto-discovery are in progress.
+
 Low-latency game streaming from Windows to macOS, built entirely in Rust.
 
 **RayHost** (server) captures your screen on a Windows PC with an Nvidia GPU, encodes
@@ -260,4 +267,8 @@ All changes go through pull requests targeting `main`. Every PR must:
 
 ## 📝 License
 
-TBD
+RayPlay is released under the
+[PolyForm Noncommercial License 1.0.0](LICENSE).
+
+Free to use for personal, educational, and non-commercial purposes.
+Commercial use requires separate written permission from the author.
