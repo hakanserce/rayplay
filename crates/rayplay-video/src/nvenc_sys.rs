@@ -136,6 +136,11 @@ pub(crate) mod ffi {
     pub const NV_ENC_PIC_TYPE_IDR: NV_ENC_PIC_TYPE = _NV_ENC_PIC_TYPE_NV_ENC_PIC_TYPE_IDR;
     pub const NV_ENC_PIC_TYPE_I: NV_ENC_PIC_TYPE = _NV_ENC_PIC_TYPE_NV_ENC_PIC_TYPE_I;
 
+    // ── Pic struct re-exports ──
+
+    pub const NV_ENC_PIC_STRUCT_FRAME: NV_ENC_PIC_STRUCT =
+        _NV_ENC_PIC_STRUCT_NV_ENC_PIC_STRUCT_FRAME;
+
     // ── Pic flag re-exports ──
 
     pub const NV_ENC_PIC_FLAG_FORCEIDR: u32 = _NV_ENC_PIC_FLAGS_NV_ENC_PIC_FLAG_FORCEIDR as u32;

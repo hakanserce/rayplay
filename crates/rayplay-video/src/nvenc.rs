@@ -44,11 +44,12 @@ mod windows {
             NV_ENC_H264_PROFILE_MAIN_GUID, NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS,
             NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX, NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE,
             NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS,
-            NV_ENC_PIC_TYPE_I, NV_ENC_PIC_TYPE_IDR, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID,
-            NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
-            NV_ENCODE_API_FUNCTION_LIST, NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION,
-            PFnNvEncodeAPICreateInstance, PFnNvEncodeAPIGetMaxSupportedVersion,
-            nvenc_status_to_string, open_session, unpack_max_version,
+            NV_ENC_PIC_STRUCT_FRAME, NV_ENC_PIC_TYPE_I, NV_ENC_PIC_TYPE_IDR, NV_ENC_PRESET_CONFIG,
+            NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS,
+            NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, NV_ENCODE_API_FUNCTION_LIST,
+            NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION, PFnNvEncodeAPICreateInstance,
+            PFnNvEncodeAPIGetMaxSupportedVersion, nvenc_status_to_string, open_session,
+            unpack_max_version,
         },
         packet::EncodedPacket,
     };
@@ -404,9 +405,10 @@ mod windows {
             }
 
             let mapped_resource = map_params.mappedResource;
+            let buffer_fmt = map_params.mappedBufferFmt;
 
             // Encode the frame
-            let result = self.encode_mapped_resource(mapped_resource, timestamp_us);
+            let result = self.encode_mapped_resource(mapped_resource, buffer_fmt, timestamp_us);
 
             // Unmap the resource
             let nvenc_unmap =
@@ -432,12 +434,14 @@ mod windows {
         fn encode_mapped_resource(
             &mut self,
             mapped_resource: *mut c_void,
+            buffer_fmt: i32,
             timestamp_us: u64,
         ) -> Result<Option<EncodedPacket>, VideoError> {
             // Setup encoding parameters
             let mut pic_params = NV_ENC_PIC_PARAMS::new_versioned();
             pic_params.inputBuffer = mapped_resource;
-            pic_params.bufferFmt = NV_ENC_BUFFER_FORMAT_ARGB;
+            pic_params.bufferFmt = buffer_fmt;
+            pic_params.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
             pic_params.inputWidth = self.config.width;
             pic_params.inputHeight = self.config.height;
             pic_params.outputBitstream = self.output_buffers[self.current_output_idx];

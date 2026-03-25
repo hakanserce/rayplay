@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use scrap::{Capturer, Display};
 
 use crate::capture::{CaptureConfig, CaptureError, CapturedFrame, ScreenCapturer, build_frame};
@@ -58,10 +60,13 @@ impl ScrapCapturer {
 
 impl ScreenCapturer for ScrapCapturer {
     fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
-        let data = self
-            .source
-            .grab()
-            .map_err(|e| CaptureError::AcquireFailed(e.to_string()))?;
+        let data = self.source.grab().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                CaptureError::Timeout(Duration::from_millis(0))
+            } else {
+                CaptureError::AcquireFailed(e.to_string())
+            }
+        })?;
         Ok(build_frame(data, self.width, self.height))
     }
 
@@ -76,16 +81,13 @@ mod tests {
 
     struct MockSource {
         data: Vec<u8>,
-        fail: bool,
+        fail_kind: Option<std::io::ErrorKind>,
     }
 
     impl FrameSource for MockSource {
         fn grab(&mut self) -> Result<Vec<u8>, std::io::Error> {
-            if self.fail {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "no frame",
-                ))
+            if let Some(kind) = self.fail_kind {
+                Err(std::io::Error::new(kind, "mock error"))
             } else {
                 Ok(self.data.clone())
             }
@@ -94,7 +96,10 @@ mod tests {
 
     fn make_test_capturer(width: u32, height: u32, data: Vec<u8>) -> ScrapCapturer {
         ScrapCapturer {
-            source: Box::new(MockSource { data, fail: false }),
+            source: Box::new(MockSource {
+                data,
+                fail_kind: None,
+            }),
             width,
             height,
         }
@@ -104,7 +109,7 @@ mod tests {
         ScrapCapturer {
             source: Box::new(MockSource {
                 data: vec![],
-                fail: true,
+                fail_kind: Some(std::io::ErrorKind::WouldBlock),
             }),
             width: 100,
             height: 100,
@@ -142,11 +147,24 @@ mod tests {
     }
 
     #[test]
-    fn test_capture_frame_error_maps_to_acquire_failed() {
+    fn test_capture_frame_would_block_maps_to_timeout() {
         let mut capturer = make_failing_capturer();
         let err = capturer.capture_frame().expect_err("should fail");
+        assert!(matches!(err, CaptureError::Timeout(_)));
+    }
+
+    #[test]
+    fn test_capture_frame_other_error_maps_to_acquire_failed() {
+        let mut capturer = ScrapCapturer {
+            source: Box::new(MockSource {
+                data: vec![],
+                fail_kind: Some(std::io::ErrorKind::ConnectionRefused),
+            }),
+            width: 100,
+            height: 100,
+        };
+        let err = capturer.capture_frame().expect_err("should fail");
         assert!(matches!(err, CaptureError::AcquireFailed(_)));
-        assert!(err.to_string().contains("no frame"));
     }
 
     #[test]
