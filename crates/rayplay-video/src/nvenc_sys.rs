@@ -138,8 +138,8 @@ pub(crate) mod ffi {
 
     // ── Pic flag re-exports ──
 
-    pub const NV_ENC_PIC_FLAG_FORCEIDR: u32 = _NV_ENC_PIC_FLAGS_NV_ENC_PIC_FLAG_FORCEIDR;
-    pub const NV_ENC_PIC_FLAG_EOS: u32 = _NV_ENC_PIC_FLAGS_NV_ENC_PIC_FLAG_EOS;
+    pub const NV_ENC_PIC_FLAG_FORCEIDR: u32 = _NV_ENC_PIC_FLAGS_NV_ENC_PIC_FLAG_FORCEIDR as u32;
+    pub const NV_ENC_PIC_FLAG_EOS: u32 = _NV_ENC_PIC_FLAGS_NV_ENC_PIC_FLAG_EOS as u32;
 
     // ── Buffer usage re-exports ──
 
