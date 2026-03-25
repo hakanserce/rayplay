@@ -68,6 +68,9 @@ ffmpeg-fallback = ["dep:ffmpeg-next", "dep:libc"]
 level = "warn"
 check-cfg = ['cfg(feature, values("cargo-clippy"))']
 
+[build-dependencies]
+bindgen = "0.71"
+
 [dev-dependencies]
 criterion.workspace  = true
 serde_json.workspace = true

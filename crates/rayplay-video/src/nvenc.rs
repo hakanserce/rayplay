@@ -39,16 +39,15 @@ mod windows {
     use crate::{
         encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder, VideoError},
         nvenc_sys::{
-            H264_FLAG_REPEAT_SPS_PPS, HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT, HEVC_FLAG_REPEAT_SPS_PPS,
-            NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_H264_GUID, NV_ENC_CODEC_HEVC_GUID,
-            NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE, NV_ENC_H264_PROFILE_MAIN_GUID,
-            NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS, NV_ENC_INPUT_RESOURCE_TYPE,
-            NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE, NV_ENC_PARAMS_RC_VBR,
-            NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS, NV_ENC_PIC_TYPE,
-            NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID, NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS,
-            NV_ENC_TUNING_INFO, NV_ENCODE_API_FUNCTION_LIST, NVENCAPI_MAJOR_VERSION,
-            NVENCAPI_MINOR_VERSION, PFnNvEncodeAPICreateInstance,
-            PFnNvEncodeAPIGetMaxSupportedVersion, RC_FLAG_ENABLE_AQ, RC_FLAG_ZERO_REORDER_DELAY,
+            NV_ENC_BUFFER_FORMAT_ARGB, NV_ENC_CODEC_H264_GUID, NV_ENC_CODEC_HEVC_GUID,
+            NV_ENC_CREATE_BITSTREAM_BUFFER, NV_ENC_DEVICE_TYPE_DIRECTX,
+            NV_ENC_H264_PROFILE_MAIN_GUID, NV_ENC_HEVC_PROFILE_MAIN_GUID, NV_ENC_INITIALIZE_PARAMS,
+            NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX, NV_ENC_LOCK_BITSTREAM, NV_ENC_MAP_INPUT_RESOURCE,
+            NV_ENC_PARAMS_RC_VBR, NV_ENC_PIC_FLAG_EOS, NV_ENC_PIC_FLAG_FORCEIDR, NV_ENC_PIC_PARAMS,
+            NV_ENC_PIC_TYPE_I, NV_ENC_PIC_TYPE_IDR, NV_ENC_PRESET_CONFIG, NV_ENC_PRESET_P1_GUID,
+            NV_ENC_REGISTER_RESOURCE, NV_ENC_SUCCESS, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+            NV_ENCODE_API_FUNCTION_LIST, NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION,
+            PFnNvEncodeAPICreateInstance, PFnNvEncodeAPIGetMaxSupportedVersion,
             nvenc_status_to_string, open_session, unpack_max_version,
         },
         packet::EncodedPacket,
@@ -158,7 +157,7 @@ mod windows {
                 unsafe { mem::transmute(create_instance_ptr) };
 
             // Create API function list
-            let mut api = NV_ENCODE_API_FUNCTION_LIST::default();
+            let mut api = NV_ENCODE_API_FUNCTION_LIST::new_versioned();
             let status = unsafe { create_instance(&mut api) };
             if status != NV_ENC_SUCCESS {
                 return Err(VideoError::EncodingFailed {
@@ -171,18 +170,12 @@ mod windows {
             }
 
             // Open encoding session (with version validation)
-            let nvenc_open =
-                api.nvEncOpenEncodeSessionEx
-                    .ok_or_else(|| VideoError::EncodingFailed {
-                        reason: "nvEncOpenEncodeSessionEx function not available".to_string(),
-                    })?;
-
             let encoder = unsafe {
                 open_session(
                     driver_max_version,
-                    nvenc_open,
+                    api.nvEncOpenEncodeSessionEx,
                     device_ptr,
-                    NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX,
+                    NV_ENC_DEVICE_TYPE_DIRECTX,
                 )?
             };
 
@@ -194,7 +187,7 @@ mod windows {
                 Codec::H264 => NV_ENC_CODEC_H264_GUID,
             };
 
-            let mut preset_config = NV_ENC_PRESET_CONFIG::default();
+            let mut preset_config = NV_ENC_PRESET_CONFIG::new_versioned();
             let nvenc_get_preset =
                 api.nvEncGetEncodePresetConfigEx
                     .ok_or_else(|| VideoError::EncodingFailed {
@@ -206,7 +199,7 @@ mod windows {
                     encoder,
                     codec_guid,
                     NV_ENC_PRESET_P1_GUID,
-                    NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
+                    NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
                     &mut preset_config,
                 )
             };
@@ -221,7 +214,7 @@ mod windows {
             }
 
             // Configure encoder parameters
-            let mut init_params = NV_ENC_INITIALIZE_PARAMS::default();
+            let mut init_params = NV_ENC_INITIALIZE_PARAMS::new_versioned();
             init_params.encodeGUID = codec_guid;
             init_params.presetGUID = NV_ENC_PRESET_P1_GUID;
             init_params.encodeWidth = config.width;
@@ -245,7 +238,8 @@ mod windows {
             encode_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
             encode_config.rcParams.averageBitRate = config.resolved_bitrate();
             encode_config.rcParams.maxBitRate = config.resolved_bitrate() * 12 / 10; // 20% headroom
-            encode_config.rcParams.rc_flags = RC_FLAG_ENABLE_AQ | RC_FLAG_ZERO_REORDER_DELAY;
+            encode_config.rcParams.set_enableAQ(1);
+            encode_config.rcParams.set_zeroReorderDelay(1);
 
             // Codec-specific configuration — modify the preset's codec config
             // in-place rather than replacing it, preserving driver-tuned values
@@ -253,18 +247,18 @@ mod windows {
             match config.codec {
                 Codec::Hevc => {
                     let hevc = unsafe { &mut encode_config.encodeCodecConfig.hevcConfig };
-                    hevc.hevc_flags =
-                        HEVC_FLAG_REPEAT_SPS_PPS | (1 << HEVC_FLAG_CHROMA_FORMAT_IDC_SHIFT); // chromaFormatIDC=1 (YUV420)
+                    hevc.set_repeatSPSPPS(1);
+                    hevc.set_chromaFormatIDC(1); // YUV420
                     hevc.idrPeriod = encode_config.gopLength;
                 }
                 Codec::H264 => {
                     let h264 = unsafe { &mut encode_config.encodeCodecConfig.h264Config };
-                    h264.h264_flags = H264_FLAG_REPEAT_SPS_PPS;
+                    h264.set_repeatSPSPPS(1);
                     h264.idrPeriod = encode_config.gopLength;
                 }
             }
 
-            init_params.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+            init_params.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
             init_params.encodeConfig = &mut encode_config;
 
             // Initialize encoder
@@ -296,7 +290,7 @@ mod windows {
                     })?;
 
             for i in 0..2 {
-                let mut buffer_params = NV_ENC_CREATE_BITSTREAM_BUFFER::default();
+                let mut buffer_params = NV_ENC_CREATE_BITSTREAM_BUFFER::new_versioned();
                 buffer_params.size = config.width * config.height; // Conservative estimate
 
                 let status = unsafe { nvenc_create_bitstream(encoder, &mut buffer_params) };
@@ -346,13 +340,12 @@ mod windows {
                         reason: "nvEncRegisterResource function not available".to_string(),
                     })?;
 
-            let mut register_params = NV_ENC_REGISTER_RESOURCE::default();
-            register_params.resourceType =
-                NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+            let mut register_params = NV_ENC_REGISTER_RESOURCE::new_versioned();
+            register_params.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
             register_params.resourceToRegister = texture_ptr;
             register_params.width = width;
             register_params.height = height;
-            register_params.bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+            register_params.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
 
             let status = unsafe { nvenc_register(self.encoder, &mut register_params) };
             if status != NV_ENC_SUCCESS {
@@ -396,7 +389,7 @@ mod windows {
                         reason: "nvEncMapInputResource function not available".to_string(),
                     })?;
 
-            let mut map_params = NV_ENC_MAP_INPUT_RESOURCE::default();
+            let mut map_params = NV_ENC_MAP_INPUT_RESOURCE::new_versioned();
             map_params.registeredResource = registered_ptr;
 
             let status = unsafe { nvenc_map(self.encoder, &mut map_params) };
@@ -442,9 +435,9 @@ mod windows {
             timestamp_us: u64,
         ) -> Result<Option<EncodedPacket>, VideoError> {
             // Setup encoding parameters
-            let mut pic_params = NV_ENC_PIC_PARAMS::default();
+            let mut pic_params = NV_ENC_PIC_PARAMS::new_versioned();
             pic_params.inputBuffer = mapped_resource;
-            pic_params.bufferFmt = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
+            pic_params.bufferFmt = NV_ENC_BUFFER_FORMAT_ARGB;
             pic_params.inputWidth = self.config.width;
             pic_params.inputHeight = self.config.height;
             pic_params.outputBitstream = self.output_buffers[self.current_output_idx];
@@ -498,7 +491,7 @@ mod windows {
                         reason: "nvEncLockBitstream function not available".to_string(),
                     })?;
 
-            let mut lock_params = NV_ENC_LOCK_BITSTREAM::default();
+            let mut lock_params = NV_ENC_LOCK_BITSTREAM::new_versioned();
             lock_params.outputBitstream = self.output_buffers[self.current_output_idx];
 
             let status = unsafe { nvenc_lock(self.encoder, &mut lock_params) };
@@ -543,10 +536,8 @@ mod windows {
             }
 
             // Determine frame type
-            let is_keyframe = matches!(
-                lock_params.pictureType,
-                NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_I | NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_IDR
-            );
+            let is_keyframe = lock_params.pictureType == NV_ENC_PIC_TYPE_I
+                || lock_params.pictureType == NV_ENC_PIC_TYPE_IDR;
 
             // Calculate frame duration from FPS
             let duration_us = 1_000_000 / u64::from(self.config.fps);
@@ -621,7 +612,7 @@ mod windows {
                     })?;
 
             // Send EOS frame to drain encoder
-            let mut pic_params = NV_ENC_PIC_PARAMS::default();
+            let mut pic_params = NV_ENC_PIC_PARAMS::new_versioned();
             pic_params.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
             pic_params.outputBitstream = self.output_buffers[self.current_output_idx];
 
