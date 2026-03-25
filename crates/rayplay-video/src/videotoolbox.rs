@@ -224,17 +224,24 @@ mod macos {
 
     // ── Annex B → HVCC/AVCC conversion (always compiled, fully testable) ───────
 
-    /// Converts an HEVC/H.264 Annex B bitstream (start-code delimited) to HVCC/AVCC
-    /// length-prefixed format required by `VideoToolbox`.
+    /// Converts an Annex B bitstream to length-prefixed format, keeping only VCL NAL units.
     ///
-    /// Each NAL unit's `0x00 0x00 0x00 0x01` or `0x00 0x00 0x01` start code is
-    /// replaced with a 4-byte big-endian NAL unit length prefix.
-    #[allow(clippy::cast_possible_truncation)] // NAL units are always < 4 GiB
-    fn annex_b_to_length_prefixed(data: &[u8]) -> Vec<u8> {
+    /// Non-VCL NALs (parameter sets, AUD, SEI) are stripped because `VideoToolbox`
+    /// requires sample buffers to contain only slice data. Parameter sets are
+    /// provided separately via `CMVideoFormatDescription`.
+    #[allow(clippy::cast_possible_truncation)]
+    fn annex_b_to_vcl_length_prefixed(data: &[u8], codec: Codec) -> Vec<u8> {
         let nals = split_nal_units(data);
         let mut out = Vec::with_capacity(data.len());
         for nal in nals {
-            if !nal.is_empty() {
+            if nal.is_empty() {
+                continue;
+            }
+            let is_vcl = match codec {
+                Codec::Hevc => is_hevc_vcl_nal(nal),
+                Codec::H264 => is_h264_vcl_nal(nal),
+            };
+            if is_vcl {
                 let len = nal.len() as u32;
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(nal);
@@ -294,6 +301,24 @@ mod macos {
         }
         let nal_type = nal[0] & 0x1F;
         (7..=8).contains(&nal_type)
+    }
+
+    /// Returns `true` if the NAL unit is an HEVC VCL NAL (types 0–31).
+    fn is_hevc_vcl_nal(nal: &[u8]) -> bool {
+        if nal.is_empty() {
+            return false;
+        }
+        let nal_type = (nal[0] >> 1) & 0x3F;
+        nal_type <= 31
+    }
+
+    /// Returns `true` if the NAL unit is an H.264 VCL NAL (types 1–5).
+    fn is_h264_vcl_nal(nal: &[u8]) -> bool {
+        if nal.is_empty() {
+            return false;
+        }
+        let nal_type = nal[0] & 0x1F;
+        (1..=5).contains(&nal_type)
     }
 
     // ── VtDecoder ──────────────────────────────────────────────────────────────
@@ -445,7 +470,7 @@ mod macos {
             &mut self,
             packet: &EncodedPacket,
         ) -> Result<Option<DecodedFrame>, VideoError> {
-            let mut length_prefixed = annex_b_to_length_prefixed(&packet.data);
+            let mut length_prefixed = annex_b_to_vcl_length_prefixed(&packet.data, self.codec);
             if length_prefixed.is_empty() {
                 return Err(VideoError::CorruptPacket {
                     reason: "packet produced empty length-prefixed bitstream".to_string(),
