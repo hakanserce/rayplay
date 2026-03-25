@@ -14,6 +14,8 @@ pub struct OpenH264Encoder {
     // Note: openh264::encoder::Encoder does not implement Debug
     encoder: Encoder,
     config: EncoderConfig,
+    frame_index: u32,
+    keyframe_interval: u32,
 }
 
 impl std::fmt::Debug for OpenH264Encoder {
@@ -56,7 +58,14 @@ impl OpenH264Encoder {
                 reason: format!("OpenH264 encoder init failed: {e}"),
             })?;
 
-        Ok(Self { encoder, config })
+        let keyframe_interval = (config.fps / 2).max(1);
+
+        Ok(Self {
+            encoder,
+            config,
+            frame_index: 0,
+            keyframe_interval,
+        })
     }
 }
 
@@ -212,6 +221,12 @@ impl VideoEncoder for OpenH264Encoder {
         }
 
         let yuv = bgra_to_yuv(&frame.data, frame.width, frame.height, frame.stride);
+
+        // Force a keyframe every 0.5 seconds for fast recovery.
+        if self.frame_index > 0 && self.frame_index.is_multiple_of(self.keyframe_interval) {
+            self.encoder.force_intra_frame();
+        }
+        self.frame_index += 1;
 
         let bitstream = self
             .encoder

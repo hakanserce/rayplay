@@ -232,7 +232,7 @@ mod windows {
                 Codec::Hevc => NV_ENC_HEVC_PROFILE_MAIN_GUID,
                 Codec::H264 => NV_ENC_H264_PROFILE_MAIN_GUID,
             };
-            encode_config.gopLength = 60; // 1 second at 60fps
+            encode_config.gopLength = (config.fps / 2).max(1); // 0.5 seconds
             encode_config.frameIntervalP = 1; // All P-frames for low latency
 
             // Rate control configuration
@@ -449,8 +449,9 @@ mod windows {
             pic_params.inputDuration = 0;
             pic_params.frameIdx = self.frame_index as u32;
 
-            // Force IDR keyframes every GOP length
-            if self.frame_index.is_multiple_of(60) {
+            // Force IDR keyframes every GOP length (0.5 seconds)
+            let gop = u64::from((self.config.fps / 2).max(1));
+            if self.frame_index.is_multiple_of(gop) {
                 pic_params.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
             }
 

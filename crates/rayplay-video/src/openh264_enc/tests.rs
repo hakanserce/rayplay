@@ -266,3 +266,108 @@ fn test_openh264_encoder_keyframe_detection() {
         "EncodedPacket.is_keyframe should match actual bitstream analysis"
     );
 }
+
+// ── Keyframe interval (GOP) tests ─────────────────────────────────────
+
+#[test]
+fn test_openh264_encoder_keyframe_interval_at_60fps() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 60)).unwrap();
+    // 0.5 seconds at 60fps = 30 frames
+    assert_eq!(enc.keyframe_interval, 30);
+}
+
+#[test]
+fn test_openh264_encoder_keyframe_interval_at_30fps() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 30)).unwrap();
+    // 0.5 seconds at 30fps = 15 frames
+    assert_eq!(enc.keyframe_interval, 15);
+}
+
+#[test]
+fn test_openh264_encoder_keyframe_interval_at_1fps() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 1)).unwrap();
+    // fps/2 = 0, clamped to 1
+    assert_eq!(enc.keyframe_interval, 1);
+}
+
+#[test]
+fn test_openh264_encoder_keyframe_interval_at_0fps() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 0)).unwrap();
+    // fps/2 = 0, clamped to 1
+    assert_eq!(enc.keyframe_interval, 1);
+}
+
+#[test]
+fn test_openh264_encoder_keyframe_interval_at_2fps() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 2)).unwrap();
+    // 0.5 seconds at 2fps = 1 frame
+    assert_eq!(enc.keyframe_interval, 1);
+}
+
+#[test]
+fn test_openh264_encoder_frame_index_starts_at_zero() {
+    let enc = OpenH264Encoder::new(make_config(64, 64, 30)).unwrap();
+    assert_eq!(enc.frame_index, 0);
+}
+
+#[test]
+fn test_openh264_encoder_frame_index_increments_on_encode() {
+    let mut enc = OpenH264Encoder::new(make_config(64, 64, 30)).unwrap();
+    let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 0);
+
+    enc.encode(EncoderInput::Cpu(&frame)).unwrap();
+    assert_eq!(enc.frame_index, 1);
+
+    enc.encode(EncoderInput::Cpu(&frame)).unwrap();
+    assert_eq!(enc.frame_index, 2);
+}
+
+#[test]
+fn test_openh264_encoder_produces_keyframe_at_interval() {
+    // Use 4fps so keyframe_interval = 2 (every 2 frames)
+    let mut enc = OpenH264Encoder::new(make_config(64, 64, 4)).unwrap();
+    assert_eq!(enc.keyframe_interval, 2);
+
+    // Encode enough frames to trigger forced keyframes
+    let mut keyframe_indices = Vec::new();
+    for i in 0..6 {
+        let f = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, i * 250_000);
+        if let Some(pkt) = enc.encode(EncoderInput::Cpu(&f)).unwrap()
+            && pkt.is_keyframe
+        {
+            keyframe_indices.push(i);
+        }
+    }
+
+    // Frame 0 should be a keyframe (first frame is always IDR)
+    assert!(
+        keyframe_indices.contains(&0),
+        "First frame should be a keyframe, got keyframes at: {keyframe_indices:?}"
+    );
+    // Frame 2 and/or 4 should also be keyframes (forced every 2 frames)
+    assert!(
+        keyframe_indices.len() >= 2,
+        "Should have at least 2 keyframes in 6 frames with interval=2, got: {keyframe_indices:?}"
+    );
+}
+
+#[test]
+fn test_openh264_encoder_first_frame_does_not_force_idr() {
+    // force_intra_frame is only called when frame_index > 0, so the
+    // first frame relies on the encoder's natural IDR behavior.
+    let mut enc = OpenH264Encoder::new(make_config(64, 64, 30)).unwrap();
+    let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 0);
+
+    let pkt = enc.encode(EncoderInput::Cpu(&frame)).unwrap().unwrap();
+    // First frame is naturally a keyframe from the encoder
+    assert!(pkt.is_keyframe);
+    assert_eq!(enc.frame_index, 1);
+}
+
+#[test]
+fn test_openh264_encoder_duration_us_at_60fps() {
+    let mut enc = OpenH264Encoder::new(make_config(64, 64, 60)).unwrap();
+    let frame = RawFrame::new(vec![128u8; 64 * 64 * 4], 64, 64, 64 * 4, 0);
+    let pkt = enc.encode(EncoderInput::Cpu(&frame)).unwrap().unwrap();
+    assert_eq!(pkt.duration_us, 1_000_000 / 60);
+}
