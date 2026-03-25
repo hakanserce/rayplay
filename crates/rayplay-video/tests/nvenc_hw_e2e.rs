@@ -9,7 +9,7 @@
 
 use std::ffi::c_void;
 
-use rayplay_video::encoder::{Codec, EncoderConfig, EncoderInput, VideoEncoder};
+use rayplay_video::encoder::{Codec, EncoderConfig, EncoderInput, GpuTextureHandle, VideoEncoder};
 
 // Re-use the D3D11 device creation from the d3d11_device module.
 use rayplay_video::d3d11_device::SharedD3D11Device;
@@ -86,12 +86,13 @@ fn test_nvenc_encode_single_frame_h264() {
     let texture_ptr = unsafe { create_test_texture(&device, 1920, 1080) };
 
     // Encode one frame
-    let input = EncoderInput::DxgiTexture {
-        texture_ptr,
+    let input = EncoderInput::GpuTexture {
+        handle: GpuTextureHandle(texture_ptr),
         width: 1920,
         height: 1080,
+        timestamp_us: 0,
     };
-    let packet = encoder.encode(&input).expect("Encoding failed");
+    let packet = encoder.encode(input).expect("Encoding failed");
 
     // Should produce output
     assert!(
@@ -142,12 +143,13 @@ fn test_nvenc_encode_single_frame_hevc() {
 
     let texture_ptr = unsafe { create_test_texture(&device, 1920, 1080) };
 
-    let input = EncoderInput::DxgiTexture {
-        texture_ptr,
+    let input = EncoderInput::GpuTexture {
+        handle: GpuTextureHandle(texture_ptr),
         width: 1920,
         height: 1080,
+        timestamp_us: 0,
     };
-    let packet = encoder.encode(&input).expect("Encoding failed");
+    let packet = encoder.encode(input).expect("Encoding failed");
 
     assert!(
         packet.is_some(),
@@ -184,13 +186,14 @@ fn test_nvenc_encode_multiple_frames_h264() {
     let mut frame_count = 0;
 
     for i in 0..10 {
-        let input = EncoderInput::DxgiTexture {
-            texture_ptr,
+        let input = EncoderInput::GpuTexture {
+            handle: GpuTextureHandle(texture_ptr),
             width: 1280,
             height: 720,
+            timestamp_us: i * 16_667, // ~60fps
         };
         let packet = encoder
-            .encode(&input)
+            .encode(input)
             .unwrap_or_else(|e| panic!("Encoding frame {i} failed: {e}"));
 
         if let Some(p) = packet {
