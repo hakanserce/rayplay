@@ -1,6 +1,24 @@
 use super::*;
 use crate::packet::EncodedPacket;
 
+// ── Test helper ───────────────────────────────────────────────────────
+
+/// Converts Annex B to length-prefixed format (all NAL units, no filtering).
+/// Used only to test the `split_nal_units` + length-prefix logic in isolation.
+#[allow(clippy::cast_possible_truncation)]
+fn annex_b_to_length_prefixed(data: &[u8]) -> Vec<u8> {
+    let nals = split_nal_units(data);
+    let mut out = Vec::with_capacity(data.len());
+    for nal in nals {
+        if !nal.is_empty() {
+            let len = nal.len() as u32;
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(nal);
+        }
+    }
+    out
+}
+
 // ── annex_b_to_length_prefixed ─────────────────────────────────────────
 
 #[test]
@@ -49,6 +67,97 @@ fn test_annex_b_to_length_prefixed_trailing_start_code_with_no_nal_bytes_returns
     // Start code at end with no bytes following — produces no NAL unit.
     let input = [0x00u8, 0x00, 0x00, 0x01];
     assert!(annex_b_to_length_prefixed(&input).is_empty());
+}
+
+// ── annex_b_to_vcl_length_prefixed ─────────────────────────────────────
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_empty_input_returns_empty() {
+    assert!(annex_b_to_vcl_length_prefixed(&[], Codec::Hevc).is_empty());
+    assert!(annex_b_to_vcl_length_prefixed(&[], Codec::H264).is_empty());
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_hevc_keyframe_keeps_only_idr() {
+    // Pattern: [AUD][VPS][SPS][PPS][SEI][IDR] - keeps only IDR
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x46, 0x01, // AUD (type 35)
+        0x00, 0x00, 0x00, 0x01, 0x40, 0x01, // VPS (type 32)
+        0x00, 0x00, 0x00, 0x01, 0x42, 0x01, // SPS (type 33)
+        0x00, 0x00, 0x00, 0x01, 0x44, 0x01, // PPS (type 34)
+        0x00, 0x00, 0x00, 0x01, 0x4E, 0x01, // SEI (type 39)
+        0x00, 0x00, 0x00, 0x01, 0x26, 0x01, // IDR (type 19)
+    ];
+    let out = annex_b_to_vcl_length_prefixed(&input, Codec::Hevc);
+    // Should contain only the IDR NAL unit
+    assert_eq!(out.len(), 6); // 4-byte length + 2-byte IDR payload
+    assert_eq!(&out[..4], &[0, 0, 0, 2]); // length prefix
+    assert_eq!(&out[4..], &[0x26, 0x01]); // IDR payload
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_hevc_p_frame_keeps_only_trail_r() {
+    // Pattern: [AUD][SEI][TRAIL_R] - keeps only TRAIL_R
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x46, 0x01, // AUD (type 35)
+        0x00, 0x00, 0x00, 0x01, 0x4E, 0x01, // SEI (type 39)
+        0x00, 0x00, 0x00, 0x01, 0x02, 0x01, // TRAIL_R (type 1)
+    ];
+    let out = annex_b_to_vcl_length_prefixed(&input, Codec::Hevc);
+    // Should contain only the TRAIL_R NAL unit
+    assert_eq!(out.len(), 6); // 4-byte length + 2-byte TRAIL_R payload
+    assert_eq!(&out[..4], &[0, 0, 0, 2]); // length prefix
+    assert_eq!(&out[4..], &[0x02, 0x01]); // TRAIL_R payload
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_hevc_all_non_vcl_returns_empty() {
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x40, 0x01, // VPS (type 32)
+        0x00, 0x00, 0x00, 0x01, 0x46, 0x01, // AUD (type 35)
+        0x00, 0x00, 0x00, 0x01, 0x4E, 0x01, // SEI (type 39)
+    ];
+    assert!(annex_b_to_vcl_length_prefixed(&input, Codec::Hevc).is_empty());
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_h264_keyframe_keeps_only_idr() {
+    // Pattern: [AUD][SPS][PPS][IDR] - keeps only IDR
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x69, 0x01, // AUD (type 9)
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x01, // SPS (type 7)
+        0x00, 0x00, 0x00, 0x01, 0x68, 0x01, // PPS (type 8)
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x01, // IDR (type 5)
+    ];
+    let out = annex_b_to_vcl_length_prefixed(&input, Codec::H264);
+    // Should contain only the IDR NAL unit
+    assert_eq!(out.len(), 6); // 4-byte length + 2-byte IDR payload
+    assert_eq!(&out[..4], &[0, 0, 0, 2]); // length prefix
+    assert_eq!(&out[4..], &[0x65, 0x01]); // IDR payload
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_h264_p_frame_keeps_only_slice() {
+    // Pattern: [AUD][slice] - keeps only slice
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x69, 0x01, // AUD (type 9)
+        0x00, 0x00, 0x00, 0x01, 0x61, 0x01, // slice (type 1)
+    ];
+    let out = annex_b_to_vcl_length_prefixed(&input, Codec::H264);
+    // Should contain only the slice NAL unit
+    assert_eq!(out.len(), 6); // 4-byte length + 2-byte slice payload
+    assert_eq!(&out[..4], &[0, 0, 0, 2]); // length prefix
+    assert_eq!(&out[4..], &[0x61, 0x01]); // slice payload
+}
+
+#[test]
+fn test_annex_b_to_vcl_length_prefixed_h264_all_non_vcl_returns_empty() {
+    let input = [
+        0x00u8, 0x00, 0x00, 0x01, 0x67, 0x01, // SPS (type 7)
+        0x00, 0x00, 0x00, 0x01, 0x69, 0x01, // AUD (type 9)
+        0x00, 0x00, 0x00, 0x01, 0x60, 0x01, // undefined type 0
+    ];
+    assert!(annex_b_to_vcl_length_prefixed(&input, Codec::H264).is_empty());
 }
 
 // ── split_nal_units ────────────────────────────────────────────────────
@@ -160,6 +269,95 @@ fn test_is_h264_parameter_set_idr_not_param_set() {
 #[test]
 fn test_is_h264_parameter_set_empty_returns_false() {
     assert!(!is_h264_parameter_set(&[]));
+}
+
+// ── is_hevc_vcl_nal ────────────────────────────────────────────────────
+
+#[test]
+fn test_is_hevc_vcl_nal_idr_type_19() {
+    assert!(is_hevc_vcl_nal(&[0x26, 0x01])); // type 19: (19 << 1) = 0x26
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_trail_r_type_1() {
+    assert!(is_hevc_vcl_nal(&[0x02, 0x01])); // type 1: (1 << 1) = 0x02
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_boundary_type_31() {
+    assert!(is_hevc_vcl_nal(&[0x3E, 0x01])); // type 31: (31 << 1) = 0x3E
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_type_0() {
+    assert!(is_hevc_vcl_nal(&[0x00, 0x01])); // type 0: (0 << 1) = 0x00
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_vps_type_32_not_vcl() {
+    assert!(!is_hevc_vcl_nal(&[0x40, 0x01])); // type 32: (32 << 1) = 0x40
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_aud_type_35_not_vcl() {
+    assert!(!is_hevc_vcl_nal(&[0x46, 0x01])); // type 35: (35 << 1) = 0x46
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_sei_type_39_not_vcl() {
+    assert!(!is_hevc_vcl_nal(&[0x4E, 0x01])); // type 39: (39 << 1) = 0x4E
+}
+
+#[test]
+fn test_is_hevc_vcl_nal_empty_returns_false() {
+    assert!(!is_hevc_vcl_nal(&[]));
+}
+
+// ── is_h264_vcl_nal ────────────────────────────────────────────────────
+
+#[test]
+fn test_is_h264_vcl_nal_idr_type_5() {
+    assert!(is_h264_vcl_nal(&[0x65, 0x01])); // type 5 = IDR
+}
+
+#[test]
+fn test_is_h264_vcl_nal_slice_type_1() {
+    assert!(is_h264_vcl_nal(&[0x61, 0x01])); // type 1 = slice
+}
+
+#[test]
+fn test_is_h264_vcl_nal_slice_type_2() {
+    assert!(is_h264_vcl_nal(&[0x62, 0x01])); // type 2 = slice
+}
+
+#[test]
+fn test_is_h264_vcl_nal_slice_type_3() {
+    assert!(is_h264_vcl_nal(&[0x63, 0x01])); // type 3 = slice
+}
+
+#[test]
+fn test_is_h264_vcl_nal_slice_type_4() {
+    assert!(is_h264_vcl_nal(&[0x64, 0x01])); // type 4 = slice
+}
+
+#[test]
+fn test_is_h264_vcl_nal_sps_type_7_not_vcl() {
+    assert!(!is_h264_vcl_nal(&[0x67, 0x01])); // type 7 = SPS
+}
+
+#[test]
+fn test_is_h264_vcl_nal_aud_type_9_not_vcl() {
+    assert!(!is_h264_vcl_nal(&[0x69, 0x01])); // type 9 = AUD
+}
+
+#[test]
+fn test_is_h264_vcl_nal_type_0_not_vcl() {
+    assert!(!is_h264_vcl_nal(&[0x60, 0x01])); // type 0 = undefined
+}
+
+#[test]
+fn test_is_h264_vcl_nal_empty_returns_false() {
+    assert!(!is_h264_vcl_nal(&[]));
 }
 
 // ── VtDecoder lifecycle ────────────────────────────────────────────────

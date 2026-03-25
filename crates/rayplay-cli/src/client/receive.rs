@@ -28,7 +28,9 @@ pub(crate) async fn run_receive_loop(
     loop {
         let packet = tokio::select! {
             () = token.cancelled() => break,
-            result = transport.recv_video() => result.map_err(anyhow::Error::from)?,
+            result = transport.recv_video() => result.map_err(|e| anyhow::anyhow!(
+                "video stream closed by host (server may have failed to start encoding pipeline): {e}"
+            ))?,
         };
 
         tracing::debug!(size = packet.data.len(), "packet_received");
