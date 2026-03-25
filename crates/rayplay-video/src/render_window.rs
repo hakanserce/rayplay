@@ -37,7 +37,7 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, KeyEvent, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::{Fullscreen, Window, WindowAttributes, WindowId},
 };
@@ -214,12 +214,19 @@ impl ApplicationHandler for AppState {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Ok(frame) = self.frame_rx.try_recv() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Run continuously so frames are picked up immediately — the client
+        // is a real-time renderer and should never sleep waiting for OS events.
+        event_loop.set_control_flow(ControlFlow::Poll);
+
+        // Drain to the latest frame, skipping any stale intermediate frames.
+        while let Ok(frame) = self.frame_rx.try_recv() {
             self.pending_frame = Some(frame);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        }
+        if self.pending_frame.is_some()
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
         }
     }
 }
@@ -363,5 +370,97 @@ mod tests {
             app.pending_frame = Some(f);
         }
         assert!(app.pending_frame.is_none());
+    }
+
+    // ── Drain-to-latest frame behavior ──────────────────────────────────────
+
+    #[test]
+    fn test_app_state_drain_keeps_only_latest_frame() {
+        use crate::{DecodedFrame, PixelFormat};
+
+        let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
+        let mut app = AppState {
+            title: "t".to_string(),
+            width: 1,
+            height: 1,
+            frame_rx: rx,
+            window: None,
+            renderer: None,
+            pending_frame: None,
+            init_error: None,
+        };
+
+        // Send three frames with distinct timestamps
+        for ts in [100, 200, 300] {
+            let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
+            tx.send(frame).unwrap();
+        }
+
+        // Drain loop: simulate the while-let in about_to_wait
+        while let Ok(f) = app.frame_rx.try_recv() {
+            app.pending_frame = Some(f);
+        }
+
+        // Only the latest frame (timestamp 300) should remain
+        let pending = app.pending_frame.unwrap();
+        assert_eq!(pending.timestamp_us, 300);
+    }
+
+    #[test]
+    fn test_app_state_drain_skips_stale_frames() {
+        use crate::{DecodedFrame, PixelFormat};
+
+        let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
+        let mut app = AppState {
+            title: "t".to_string(),
+            width: 1,
+            height: 1,
+            frame_rx: rx,
+            window: None,
+            renderer: None,
+            pending_frame: None,
+            init_error: None,
+        };
+
+        // Fill channel with 4 frames
+        for ts in [10, 20, 30, 40] {
+            let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
+            tx.send(frame).unwrap();
+        }
+
+        while let Ok(f) = app.frame_rx.try_recv() {
+            app.pending_frame = Some(f);
+        }
+
+        // Channel should be fully drained
+        assert!(app.frame_rx.try_recv().is_err());
+        // Latest frame is kept
+        assert_eq!(app.pending_frame.unwrap().timestamp_us, 40);
+    }
+
+    #[test]
+    fn test_app_state_drain_single_frame_works() {
+        use crate::{DecodedFrame, PixelFormat};
+
+        let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(2);
+        let mut app = AppState {
+            title: "t".to_string(),
+            width: 1,
+            height: 1,
+            frame_rx: rx,
+            window: None,
+            renderer: None,
+            pending_frame: None,
+            init_error: None,
+        };
+
+        let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 42);
+        tx.send(frame).unwrap();
+
+        while let Ok(f) = app.frame_rx.try_recv() {
+            app.pending_frame = Some(f);
+        }
+
+        assert_eq!(app.pending_frame.unwrap().timestamp_us, 42);
     }
 }

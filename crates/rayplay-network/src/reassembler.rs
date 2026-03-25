@@ -7,7 +7,10 @@ use rayplay_core::packet::EncodedPacket;
 use crate::wire::{FLAG_KEYFRAME, VideoFragment};
 
 /// Maximum number of incomplete frames held in memory simultaneously (ADR-003).
-pub const MAX_IN_FLIGHT_FRAMES: usize = 4;
+///
+/// Set to 16 to prevent premature eviction of large keyframes (50+ fragments)
+/// while small P-frames (1–5 fragments) complete and advance the sliding window.
+pub const MAX_IN_FLIGHT_FRAMES: usize = 16;
 
 /// State for a single partially-received frame.
 struct PendingFrame {

@@ -80,6 +80,11 @@ impl FfmpegEncoder {
         ));
         ctx.set_bit_rate(config.resolved_bitrate() as usize);
 
+        // Keyframe every 0.5 seconds for fast recovery from packet loss.
+        let gop = u32::from(u16::try_from(config.fps).unwrap_or(u16::MAX)) / 2;
+        ctx.set_gop(gop.max(1));
+        ctx.set_max_b_frames(0);
+
         let mut opts = Dictionary::new();
         // ultrafast/zerolatency are valid for both libx264 and libx265
         opts.set("preset", "ultrafast");
