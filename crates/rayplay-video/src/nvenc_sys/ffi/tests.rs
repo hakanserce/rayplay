@@ -345,7 +345,7 @@ fn status_code_values_match_sdk() {
 
 #[test]
 fn status_to_string_returns_correct_name_for_every_sdk_code() {
-    let expected: &[(u32, &str)] = &[
+    let expected: &[(NVENCSTATUS, &str)] = &[
         (0, "NV_ENC_SUCCESS"),
         (1, "NV_ENC_ERR_NO_ENCODE_DEVICE"),
         (2, "NV_ENC_ERR_UNSUPPORTED_DEVICE"),
@@ -385,7 +385,7 @@ fn status_to_string_returns_correct_name_for_every_sdk_code() {
 
 #[test]
 fn all_sdk_status_codes_are_recognized() {
-    for code in 0..=26u32 {
+    for code in 0..=26 as NVENCSTATUS {
         let s = nvenc_status_to_string(code);
         assert!(
             !s.contains("UNKNOWN"),
@@ -662,7 +662,7 @@ fn test_e2e_mock_driver_rejects_wrong_api_version() {
 fn nvenc_error_chain_reports_real_error_name() {
     // These are the error codes nvEncOpenEncodeSessionEx can return
     // (SDK docs, nvEncodeAPI.h lines 2852-2858)
-    let session_open_errors: &[(u32, &str)] = &[
+    let session_open_errors: &[(NVENCSTATUS, &str)] = &[
         (6, "NV_ENC_ERR_INVALID_PTR"),
         (3, "NV_ENC_ERR_INVALID_ENCODERDEVICE"),
         (5, "NV_ENC_ERR_DEVICE_NOT_EXIST"),
