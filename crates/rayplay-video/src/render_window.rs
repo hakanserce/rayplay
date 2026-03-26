@@ -37,7 +37,7 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, KeyEvent, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, PhysicalKey},
     window::{Fullscreen, Window, WindowAttributes, WindowId},
 };
@@ -74,23 +74,44 @@ impl RenderWindow {
         }
     }
 
+    /// Creates the `winit` event loop and returns it together with a proxy
+    /// that can wake the loop from another thread.
+    ///
+    /// Call this on the main thread before spawning background threads, then
+    /// pass the proxy (or a [`FrameNotifier`] wrapping it) to the producer
+    /// side and hand the event loop to [`run`](Self::run).
+    ///
+    /// # Errors
+    ///
+    /// - [`RenderError::Failed`] — event loop creation failed.
+    pub fn create_event_loop() -> Result<(EventLoop<()>, EventLoopProxy<()>), RenderError> {
+        let event_loop = EventLoop::with_user_event()
+            .build()
+            .map_err(|e| RenderError::Failed {
+                reason: format!("event loop: {e}"),
+            })?;
+        let proxy = event_loop.create_proxy();
+        Ok((event_loop, proxy))
+    }
+
     /// Starts the `winit` event loop and renders frames from `frame_rx`.
+    ///
+    /// The event loop uses [`ControlFlow::Wait`] and relies on the producer
+    /// thread calling [`EventLoopProxy::send_event`] (via [`FrameNotifier`])
+    /// to wake it when a new frame is available.
     ///
     /// Blocks the calling thread (must be the main thread on macOS).  Returns
     /// when the user closes the window or an unrecoverable error occurs.
     ///
     /// # Errors
     ///
-    /// - [`RenderError::Failed`] — event loop creation failed, window creation
-    ///   failed, or GPU adapter / device initialisation failed.
+    /// - [`RenderError::Failed`] — window creation failed or GPU adapter /
+    ///   device initialisation failed.
     pub fn run(
         self,
+        event_loop: EventLoop<()>,
         frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
     ) -> Result<(), RenderError> {
-        let event_loop = EventLoop::new().map_err(|e| RenderError::Failed {
-            reason: format!("event loop: {e}"),
-        })?;
-
         let mut app = AppState {
             title: self.title,
             width: self.width,
@@ -215,11 +236,15 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Run continuously so frames are picked up immediately — the client
-        // is a real-time renderer and should never sleep waiting for OS events.
-        event_loop.set_control_flow(ControlFlow::Poll);
+        // Sleep until an OS event or a `FrameNotifier::notify()` call wakes us.
+        // This replaces the previous `ControlFlow::Poll` busy-loop that caused
+        // ~82 % CPU usage on Apple Silicon.
+        event_loop.set_control_flow(ControlFlow::Wait);
+    }
 
-        // Drain to the latest frame, skipping any stale intermediate frames.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        // Woken by `FrameNotifier` — drain to the latest frame, skipping stale
+        // intermediate frames, and request a redraw for the most recent one.
         while let Ok(frame) = self.frame_rx.try_recv() {
             self.pending_frame = Some(frame);
         }

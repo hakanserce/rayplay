@@ -58,6 +58,8 @@ args = ["fmt", "--all"]
 # Excluded files (platform/hardware glue — untestable on headless CI):
 #   main.rs            — binary entry points with no testable logic
 #     (also matches client_main.rs).
+#   frame_notifier.rs  — winit EventLoopProxy wrapper; requires a live event
+#     loop to construct and test the notify path.
 #   render_window.rs   — winit event-loop glue; ActiveEventLoop and Window
 #     cannot be constructed outside the event loop.
 #   wgpu_surface.rs    — requires a live wgpu::Surface backed by a real OS
@@ -81,12 +83,12 @@ args = ["fmt", "--all"]
 clear = true
 description = "Coverage check — fails if line coverage drops below 90%"
 command = "cargo"
-args = ["llvm-cov", "--workspace", "--fail-under-lines", "90", "--ignore-filename-regex", "main\\.rs|render_window\\.rs|wgpu_renderer\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|server_cert_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs|videotoolbox\\.rs|nvenc\\.rs|nvenc_sys\\.rs|d3d11_device\\.rs|dxgi_capture\\.rs"]
+args = ["llvm-cov", "--workspace", "--fail-under-lines", "90", "--ignore-filename-regex", "main\\.rs|frame_notifier\\.rs|render_window\\.rs|wgpu_renderer\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|server_cert_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs|videotoolbox\\.rs|nvenc\\.rs|nvenc_sys\\.rs|d3d11_device\\.rs|dxgi_capture\\.rs"]
 
 [tasks.coverage-html]
 description = "Generate LLVM coverage report (HTML, opens browser)"
 script = [
-    '''cargo llvm-cov --workspace --html --ignore-filename-regex "main\\.rs|render_window\\.rs|wgpu_renderer\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|server_cert_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs|videotoolbox\\.rs|nvenc\\.rs|nvenc_sys\\.rs|d3d11_device\\.rs|dxgi_capture\\.rs"''',
+    '''cargo llvm-cov --workspace --html --ignore-filename-regex "main\\.rs|frame_notifier\\.rs|render_window\\.rs|wgpu_renderer\\.rs|wgpu_surface\\.rs|wgpu_iosurface\\.rs|ffmpeg_enc\\.rs|ffmpeg_dec\\.rs|test_helper\\.rs|scrap_capture\\.rs|capture_factory\\.rs|transport_tls\\.rs|trust_store\\.rs|client_key_store\\.rs|server_cert_store\\.rs|platform_dirs\\.rs|host_pairing_glue\\.rs|connect\\.rs|receive\\.rs|screen_permission_macos\\.rs|sck_capture\\.rs|host_capture_macos\\.rs|videotoolbox\\.rs|nvenc\\.rs|nvenc_sys\\.rs|d3d11_device\\.rs|dxgi_capture\\.rs"''',
     "open target/llvm-cov/html/index.html"
 ]
 

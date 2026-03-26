@@ -14,7 +14,7 @@ fn main() -> Result<()> {
 fn main() -> Result<()> {
     use clap::Parser;
     use client::{ClientArgs, ClientConfig};
-    use rayplay_video::{DecodedFrame, RenderWindow};
+    use rayplay_video::{DecodedFrame, FrameNotifier, RenderWindow};
     use tokio_util::sync::CancellationToken;
 
     /// Bounded capacity of the decoded-frame channel between the network thread
@@ -43,6 +43,15 @@ fn main() -> Result<()> {
     let width = config.width;
     let height = config.height;
 
+    // Create the event loop on the main thread (AppKit requirement) and
+    // extract a proxy *before* spawning background threads.  The proxy is
+    // wrapped in a `FrameNotifier` so the network thread can wake the render
+    // loop each time a decoded frame is available — this lets the event loop
+    // use `ControlFlow::Wait` instead of the previous `ControlFlow::Poll`
+    // busy-loop that consumed ~82 % CPU on Apple Silicon.
+    let (event_loop, proxy) = RenderWindow::create_event_loop()?;
+    let notifier = FrameNotifier::new(proxy);
+
     let (frame_tx, frame_rx) =
         crossbeam_channel::bounded::<DecodedFrame>(DEFAULT_FRAME_CHANNEL_CAPACITY);
     let token = CancellationToken::new();
@@ -60,14 +69,14 @@ fn main() -> Result<()> {
                 tracing::info!("Ctrl+C received, disconnecting");
                 ctrl_token2.cancel();
             });
-            if let Err(e) = client::connect(config, frame_tx, ctrl_token).await {
+            if let Err(e) = client::connect(config, frame_tx, notifier, ctrl_token).await {
                 tracing::error!(error = %e, "Connection error");
             }
         });
     });
 
     // Main thread: runs the winit event loop until the window is closed.
-    let render_result = RenderWindow::new("RayView", width, height).run(frame_rx);
+    let render_result = RenderWindow::new("RayView", width, height).run(event_loop, frame_rx);
     if let Err(ref e) = render_result {
         tracing::error!(error = %e, "Render window error");
     }

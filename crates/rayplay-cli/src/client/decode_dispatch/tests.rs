@@ -1,8 +1,13 @@
 use super::*;
 use crate::client::test_helper::NullDecoder;
+use rayplay_video::FrameNotifier;
 
 fn make_packet() -> EncodedPacket {
     EncodedPacket::new(vec![0u8; 4], false, 0, 0)
+}
+
+fn notifier() -> FrameNotifier {
+    FrameNotifier::no_op()
 }
 
 #[test]
@@ -12,7 +17,7 @@ fn test_decode_and_dispatch_sent() {
         fail: false,
     };
     let (tx, rx) = crossbeam_channel::bounded(1);
-    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx);
+    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx, &notifier());
     assert_eq!(result, DispatchResult::Sent);
     assert_eq!(rx.len(), 1);
 }
@@ -24,7 +29,7 @@ fn test_decode_and_dispatch_channel_full() {
         fail: false,
     };
     let (tx, _rx) = crossbeam_channel::bounded(0); // zero-capacity → always full
-    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx);
+    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx, &notifier());
     assert_eq!(result, DispatchResult::Dropped);
 }
 
@@ -36,7 +41,7 @@ fn test_decode_and_dispatch_channel_disconnected() {
     };
     let (tx, rx) = crossbeam_channel::bounded(1);
     drop(rx); // disconnect
-    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx);
+    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx, &notifier());
     assert_eq!(result, DispatchResult::ChannelClosed);
 }
 
@@ -47,7 +52,7 @@ fn test_decode_and_dispatch_no_frame() {
         fail: false,
     };
     let (tx, _rx) = crossbeam_channel::bounded(1);
-    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx);
+    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx, &notifier());
     assert_eq!(result, DispatchResult::NoFrame);
 }
 
@@ -58,6 +63,6 @@ fn test_decode_and_dispatch_decode_error() {
         fail: true,
     };
     let (tx, _rx) = crossbeam_channel::bounded(1);
-    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx);
+    let result = decode_and_dispatch(&mut decoder, &make_packet(), &tx, &notifier());
     assert_eq!(result, DispatchResult::DecodeError);
 }

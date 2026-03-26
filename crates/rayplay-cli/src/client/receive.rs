@@ -3,7 +3,7 @@
 use anyhow::Result;
 use crossbeam_channel::Sender;
 use rayplay_network::QuicVideoTransport;
-use rayplay_video::{DecodedFrame, decoder::VideoDecoder};
+use rayplay_video::{DecodedFrame, FrameNotifier, decoder::VideoDecoder};
 use tokio_util::sync::CancellationToken;
 
 use super::decode_dispatch::{DispatchResult, decode_and_dispatch};
@@ -23,6 +23,7 @@ pub(crate) async fn run_receive_loop(
     mut transport: QuicVideoTransport,
     mut decoder: Box<dyn VideoDecoder>,
     frame_tx: Sender<DecodedFrame>,
+    notifier: FrameNotifier,
     token: CancellationToken,
 ) -> Result<()> {
     loop {
@@ -35,7 +36,9 @@ pub(crate) async fn run_receive_loop(
 
         tracing::debug!(size = packet.data.len(), "packet_received");
 
-        if decode_and_dispatch(&mut *decoder, &packet, &frame_tx) == DispatchResult::ChannelClosed {
+        if decode_and_dispatch(&mut *decoder, &packet, &frame_tx, &notifier)
+            == DispatchResult::ChannelClosed
+        {
             break;
         }
     }
