@@ -1,5 +1,6 @@
 use super::*;
 use crate::client::test_helper::loopback_listener;
+use rayplay_video::FrameNotifier;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_connect_with_handler_shutdown_before_connect() {
@@ -153,7 +154,9 @@ async fn test_connect_cert_missing_returns_error() {
     };
     let (frame_tx, _rx) = crossbeam_channel::bounded(4);
     let token = CancellationToken::new();
-    let err = connect(config, frame_tx, token).await.unwrap_err();
+    let err = connect(config, frame_tx, FrameNotifier::no_op(), token)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("failed to read"));
 }
 
@@ -180,7 +183,11 @@ async fn test_connect_succeeds_with_valid_cert_and_immediate_shutdown() {
     let (frame_tx, _rx) = crossbeam_channel::bounded(4);
     let token = CancellationToken::new();
     token.cancel();
-    assert!(connect(config, frame_tx, token).await.is_ok());
+    assert!(
+        connect(config, frame_tx, FrameNotifier::no_op(), token)
+            .await
+            .is_ok()
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -205,7 +212,12 @@ async fn test_connect_handler_runs_until_shutdown() {
     };
     let (frame_tx, _rx) = crossbeam_channel::bounded(4);
     let token = CancellationToken::new();
-    let task = tokio::spawn(connect(config, frame_tx, token.clone()));
+    let task = tokio::spawn(connect(
+        config,
+        frame_tx,
+        FrameNotifier::no_op(),
+        token.clone(),
+    ));
 
     let _server = server_task.await.unwrap();
     token.cancel();

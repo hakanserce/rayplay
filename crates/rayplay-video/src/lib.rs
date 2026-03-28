@@ -25,6 +25,7 @@ pub mod decoded_frame;
 pub mod decoder;
 pub mod encoder;
 pub mod frame;
+pub mod frame_notifier;
 pub mod nvenc;
 pub mod packet;
 pub mod pipeline_mode;
@@ -73,6 +74,7 @@ pub use encoder::{
     create_encoder, create_encoder_with_device,
 };
 pub use frame::RawFrame;
+pub use frame_notifier::FrameNotifier;
 pub use packet::EncodedPacket;
 pub use pipeline_mode::PipelineMode;
 pub use render_window::RenderWindow;

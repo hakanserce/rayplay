@@ -5,7 +5,7 @@
 //! business logic testable without a QUIC transport or async runtime.
 
 use crossbeam_channel::Sender;
-use rayplay_video::{DecodedFrame, decoder::VideoDecoder, packet::EncodedPacket};
+use rayplay_video::{DecodedFrame, FrameNotifier, decoder::VideoDecoder, packet::EncodedPacket};
 
 /// Outcome of decoding one packet and dispatching the resulting frame.
 #[derive(Debug, PartialEq, Eq)]
@@ -26,10 +26,14 @@ pub(crate) enum DispatchResult {
 ///
 /// Returns a [`DispatchResult`] indicating what happened so the caller can
 /// decide whether to continue or break out of the receive loop.
+///
+/// After a successful send, `notifier` wakes the `winit` event loop so it
+/// picks up the frame immediately without busy-polling.
 pub(crate) fn decode_and_dispatch(
     decoder: &mut dyn VideoDecoder,
     packet: &EncodedPacket,
     frame_tx: &Sender<DecodedFrame>,
+    notifier: &FrameNotifier,
 ) -> DispatchResult {
     match decoder.decode(packet) {
         Ok(Some(frame)) => {
@@ -40,7 +44,10 @@ pub(crate) fn decode_and_dispatch(
                 "frame_decoded"
             );
             match frame_tx.try_send(frame) {
-                Ok(()) => DispatchResult::Sent,
+                Ok(()) => {
+                    notifier.notify();
+                    DispatchResult::Sent
+                }
                 Err(crossbeam_channel::TrySendError::Full(_)) => {
                     tracing::trace!("Renderer is behind, frame dropped");
                     DispatchResult::Dropped

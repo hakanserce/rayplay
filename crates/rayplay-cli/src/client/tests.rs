@@ -4,13 +4,17 @@
 //! connection, making the suite too large to embed inline in `receive.rs`.
 
 use rayplay_network::QuicVideoTransport;
-use rayplay_video::{DecodedFrame, PixelFormat, packet::EncodedPacket};
+use rayplay_video::{DecodedFrame, FrameNotifier, PixelFormat, packet::EncodedPacket};
 use tokio_util::sync::CancellationToken;
 
 use super::{
     receive::run_receive_loop,
     test_helper::{NullDecoder, SkipBadDecoder, loopback_listener},
 };
+
+fn notifier() -> FrameNotifier {
+    FrameNotifier::no_op()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_run_receive_loop_exits_on_shutdown() {
@@ -30,6 +34,7 @@ async fn test_run_receive_loop_exits_on_shutdown() {
                 fail: false
             }),
             frame_tx,
+            notifier(),
             token
         )
         .await
@@ -58,6 +63,7 @@ async fn test_run_receive_loop_transport_error_propagates() {
                 fail: false
             }),
             frame_tx,
+            notifier(),
             token
         )
         .await
@@ -87,6 +93,7 @@ async fn test_run_receive_loop_forwards_decoded_frame() {
             fail: false,
         }),
         frame_tx,
+        notifier(),
         token.clone(),
     ));
 
@@ -121,6 +128,7 @@ async fn test_run_receive_loop_buffering_none_continues() {
             fail: false,
         }),
         frame_tx,
+        notifier(),
         token.clone(),
     ));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -151,6 +159,7 @@ async fn test_run_receive_loop_decode_error_is_skipped() {
         transport,
         Box::new(SkipBadDecoder),
         frame_tx,
+        notifier(),
         token.clone(),
     ));
     frame_rx
@@ -184,6 +193,7 @@ async fn test_run_receive_loop_exits_when_channel_disconnected() {
                 fail: false
             }),
             frame_tx,
+            notifier(),
             token
         )
         .await
@@ -223,6 +233,7 @@ async fn test_run_receive_loop_drops_frame_when_channel_full() {
             fail: false,
         }),
         frame_tx,
+        notifier(),
         token.clone(),
     ));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

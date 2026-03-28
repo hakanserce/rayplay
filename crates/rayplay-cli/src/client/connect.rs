@@ -125,6 +125,7 @@ async fn run_pipeline_with_handshake(
     mut control: rayplay_network::ControlChannel,
     pipeline_mode: rayplay_video::PipelineMode,
     frame_tx: crossbeam_channel::Sender<rayplay_video::DecodedFrame>,
+    notifier: rayplay_video::FrameNotifier,
     token: CancellationToken,
 ) -> Result<()> {
     use rayplay_video::create_decoder;
@@ -157,7 +158,7 @@ async fn run_pipeline_with_handshake(
     let decoder = create_decoder(actual_codec, pipeline_mode)
         .map_err(|e| anyhow::anyhow!("decoder initialisation failed: {e}"))?;
 
-    super::receive::run_receive_loop(transport, decoder, frame_tx, token).await
+    super::receive::run_receive_loop(transport, decoder, frame_tx, notifier, token).await
 }
 
 /// Connects to the host in `config` and runs the full receive-decode pipeline
@@ -174,6 +175,7 @@ async fn run_pipeline_with_handshake(
 pub async fn connect(
     config: super::config::ClientConfig,
     frame_tx: crossbeam_channel::Sender<rayplay_video::DecodedFrame>,
+    notifier: rayplay_video::FrameNotifier,
     token: CancellationToken,
 ) -> Result<()> {
     let server_addr = config.server_addr;
@@ -228,7 +230,8 @@ pub async fn connect(
         }
 
         // After pairing, run the decode pipeline with codec negotiation
-        run_pipeline_with_handshake(transport, control, pipeline_mode, frame_tx, token).await
+        run_pipeline_with_handshake(transport, control, pipeline_mode, frame_tx, notifier, token)
+            .await
     } else {
         // Normal mode: cert-based connect with challenge-response auth
         let cert_bytes = config.load_cert_bytes()?;
@@ -244,6 +247,7 @@ pub async fn connect(
             token,
             move |transport, child| {
                 let frame_tx = frame_tx.clone();
+                let notifier = notifier.clone();
                 let signing_key = signing_key.clone();
                 async move {
                     let mut control = transport
@@ -264,8 +268,15 @@ pub async fn connect(
                     }
 
                     // Run the decode pipeline with codec negotiation
-                    run_pipeline_with_handshake(transport, control, pipeline_mode, frame_tx, child)
-                        .await
+                    run_pipeline_with_handshake(
+                        transport,
+                        control,
+                        pipeline_mode,
+                        frame_tx,
+                        notifier,
+                        child,
+                    )
+                    .await
                 }
             },
         )
