@@ -41,7 +41,7 @@ impl SCStreamOutputTrait for FrameHandler {
 }
 
 pub struct SckCapturer {
-    _stream: Arc<SCStream>,
+    stream: Arc<SCStream>,
     rx: Receiver<Vec<u8>>,
     width: u32,
     height: u32,
@@ -90,12 +90,20 @@ impl SckCapturer {
         let timeout = Duration::from_millis(u64::from(config.acquire_timeout_ms));
 
         Ok(Self {
-            _stream: Arc::new(stream),
+            stream: Arc::new(stream),
             rx,
             width,
             height,
             timeout,
         })
+    }
+}
+
+impl Drop for SckCapturer {
+    fn drop(&mut self) {
+        if let Err(e) = self.stream.stop_capture() {
+            tracing::debug!(error = %e, "SCStream stop_capture on drop");
+        }
     }
 }
 
