@@ -61,7 +61,10 @@ impl ScrapCapturer {
 impl ScreenCapturer for ScrapCapturer {
     fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
         let data = self.source.grab().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) {
                 CaptureError::Timeout(Duration::from_millis(0))
             } else {
                 CaptureError::AcquireFailed(e.to_string())
@@ -149,6 +152,20 @@ mod tests {
     #[test]
     fn test_capture_frame_would_block_maps_to_timeout() {
         let mut capturer = make_failing_capturer();
+        let err = capturer.capture_frame().expect_err("should fail");
+        assert!(matches!(err, CaptureError::Timeout(_)));
+    }
+
+    #[test]
+    fn test_capture_frame_timed_out_maps_to_timeout() {
+        let mut capturer = ScrapCapturer {
+            source: Box::new(MockSource {
+                data: vec![],
+                fail_kind: Some(std::io::ErrorKind::TimedOut),
+            }),
+            width: 100,
+            height: 100,
+        };
         let err = capturer.capture_frame().expect_err("should fail");
         assert!(matches!(err, CaptureError::Timeout(_)));
     }

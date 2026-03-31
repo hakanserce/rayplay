@@ -184,9 +184,12 @@ pub(crate) fn drive_encode_loop(
     loop {
         let frame = match capturer.capture_frame() {
             Ok(f) => f,
-            Err(CaptureError::Timeout(_)) => {
+            Err(CaptureError::Timeout(d)) => {
                 if packet_tx.is_closed() {
                     return;
+                }
+                if d.is_zero() {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 continue;
             }
