@@ -1,6 +1,9 @@
 use std::{
     net::SocketAddr,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 
@@ -222,6 +225,140 @@ impl VideoEncoder for PanickingEncoder {
 
     fn config(&self) -> &EncoderConfig {
         &self.config
+    }
+}
+
+// ── Callback-based capturers (model SckCapturer pattern) ─────────────────
+
+/// Models `SckCapturer` with proper cleanup: a background thread pushes frames
+/// into a channel, and `Drop` stops the thread before releasing resources.
+/// This is the *fixed* pattern — after the bug fix in #103.
+struct CallbackCapturer {
+    stop: Arc<AtomicBool>,
+    rx: crossbeam_channel::Receiver<Vec<u8>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    width: u32,
+    height: u32,
+}
+
+impl CallbackCapturer {
+    fn new(width: u32, height: u32) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let stop_clone = stop.clone();
+        let w = width;
+        let h = height;
+        let thread = std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::SeqCst) {
+                let data = vec![0u8; (w * h * 4) as usize];
+                match tx.try_send(data) {
+                    Ok(()) | Err(crossbeam_channel::TrySendError::Full(_)) => {}
+                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => return,
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        Self {
+            stop,
+            rx,
+            thread: Some(thread),
+            width,
+            height,
+        }
+    }
+
+    fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
+}
+
+impl Drop for CallbackCapturer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl ScreenCapturer for CallbackCapturer {
+    fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
+        let data = self
+            .rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .map_err(|_| CaptureError::Timeout(std::time::Duration::from_millis(100)))?;
+        Ok(CapturedFrame {
+            width: self.width,
+            height: self.height,
+            stride: self.width * 4,
+            data,
+            timestamp: Instant::now(),
+        })
+    }
+
+    fn resolution(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+/// Models `SckCapturer` WITHOUT cleanup — the pre-fix bug.
+/// The background thread is NOT stopped on drop, demonstrating the leak
+/// that leads to use-after-free / segfault in issue #103.
+struct LeakyCallbackCapturer {
+    #[allow(dead_code)] // intentionally unused — models the bug (no stop on drop)
+    stop: Arc<AtomicBool>,
+    rx: crossbeam_channel::Receiver<Vec<u8>>,
+    width: u32,
+    height: u32,
+}
+
+impl LeakyCallbackCapturer {
+    fn new(width: u32, height: u32) -> (Self, Arc<AtomicBool>) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let stop_clone = stop.clone();
+        let w = width;
+        let h = height;
+        std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::SeqCst) {
+                let data = vec![0u8; (w * h * 4) as usize];
+                match tx.try_send(data) {
+                    Ok(()) | Err(crossbeam_channel::TrySendError::Full(_)) => {}
+                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => return,
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let flag = stop.clone();
+        (
+            Self {
+                stop,
+                rx,
+                width,
+                height,
+            },
+            flag,
+        )
+    }
+}
+
+impl ScreenCapturer for LeakyCallbackCapturer {
+    fn capture_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
+        let data = self
+            .rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .map_err(|_| CaptureError::Timeout(std::time::Duration::from_millis(100)))?;
+        Ok(CapturedFrame {
+            width: self.width,
+            height: self.height,
+            stride: self.width * 4,
+            data,
+            timestamp: Instant::now(),
+        })
+    }
+
+    fn resolution(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 }
 
@@ -1009,4 +1146,122 @@ async fn test_e2e_network_error_does_not_crash_client() {
 
     let result = client.recv_video().await;
     assert!(result.is_err());
+}
+
+// ── Callback capturer tests (issue #103) ─────────────────────────────────
+
+#[test]
+fn test_callback_capturer_resolution() {
+    let c = CallbackCapturer::new(1920, 1080);
+    assert_eq!(c.resolution(), (1920, 1080));
+}
+
+#[test]
+fn test_callback_capturer_captures_frame() {
+    let mut c = CallbackCapturer::new(2, 2);
+    let frame = c.capture_frame().expect("should capture");
+    assert_eq!(frame.width, 2);
+    assert_eq!(frame.height, 2);
+    assert_eq!(frame.data.len(), 16);
+}
+
+#[test]
+fn test_leaky_capturer_resolution() {
+    let (c, stop) = LeakyCallbackCapturer::new(640, 480);
+    assert_eq!(c.resolution(), (640, 480));
+    stop.store(true, Ordering::SeqCst);
+}
+
+#[test]
+fn test_leaky_capturer_captures_frame() {
+    let (mut c, stop) = LeakyCallbackCapturer::new(2, 2);
+    let frame = c.capture_frame().expect("should capture");
+    assert_eq!(frame.width, 2);
+    assert_eq!(frame.data.len(), 16);
+    stop.store(true, Ordering::SeqCst);
+}
+
+/// Demonstrates the bug from issue #103: dropping a capturer that has a
+/// background callback thread but NO stop-on-drop leaves the thread running.
+/// In the real `SckCapturer`, this means `ScreenCaptureKit` callbacks continue
+/// firing on freed memory → segfault.
+#[test]
+fn test_leaky_capturer_background_thread_outlives_drop() {
+    let (capturer, stop_flag) = LeakyCallbackCapturer::new(2, 2);
+
+    // Drop the capturer without stopping the background thread.
+    drop(capturer);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // The background thread is STILL running — nobody stopped it.
+    // In the real SckCapturer, this is the SCK dispatch queue callback
+    // that causes a use-after-free segfault.
+    assert!(
+        !stop_flag.load(Ordering::SeqCst),
+        "leaky capturer should NOT stop its background thread on drop"
+    );
+
+    // Clean up the test.
+    stop_flag.store(true, Ordering::SeqCst);
+}
+
+/// Demonstrates the fix for issue #103: a capturer with proper Drop stops
+/// the background thread, preventing use-after-free.
+#[test]
+fn test_callback_capturer_stops_background_thread_on_drop() {
+    let capturer = CallbackCapturer::new(2, 2);
+    let stop_flag = capturer.stop_flag();
+
+    assert!(!stop_flag.load(Ordering::SeqCst), "not stopped yet");
+
+    // Drop triggers the stop.
+    drop(capturer);
+
+    assert!(
+        stop_flag.load(Ordering::SeqCst),
+        "Drop should stop the background thread"
+    );
+}
+
+/// Full reconnection scenario from issue #103: host streams to client 1,
+/// client 1 disconnects, host accepts client 2 and streams successfully.
+/// Uses `CallbackCapturer` (with proper Drop) to model `SckCapturer`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_e2e_callback_capturer_reconnect_after_disconnect() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let (listener, cert_der) = QuicVideoTransport::listen(bind).unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let token = CancellationToken::new();
+    let host_task = tokio::spawn({
+        let token = token.clone();
+        async move {
+            serve_with_handler(listener, token, |transport, child| async move {
+                let capturer = Box::new(CallbackCapturer::new(2, 2));
+                let encoder = Box::new(StubEncoder::new(EncoderConfig::new(2, 2, 60)));
+                stream_with_pipeline(transport, capturer, encoder, child).await
+            })
+            .await
+        }
+    });
+
+    // Client 1: connect, receive one frame, disconnect.
+    {
+        let mut c1 = QuicVideoTransport::connect(addr, cert_der.clone())
+            .await
+            .unwrap();
+        let _pkt = c1.recv_video().await.expect("client 1 recv");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Client 2: connect and receive one frame — proves host survived the
+    // first disconnect without crashing (the #103 segfault).
+    {
+        let mut c2 = QuicVideoTransport::connect(addr, cert_der).await.unwrap();
+        let pkt = c2.recv_video().await.expect("client 2 recv");
+        assert!(!pkt.data.is_empty());
+    }
+
+    token.cancel();
+    host_task.await.unwrap().unwrap();
 }
