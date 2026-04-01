@@ -205,6 +205,15 @@ impl WgpuRenderer {
         }
     }
 
+    /// Returns the surface texture format, or `Rgba8Unorm` for offscreen.
+    #[must_use]
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        match &self.output {
+            RendererOutput::Surface { config, .. } => config.format,
+            RendererOutput::Offscreen { .. } => wgpu::TextureFormat::Rgba8Unorm,
+        }
+    }
+
     /// Reconfigures the swap chain after a window resize.
     ///
     /// Call this when [`RenderError::SurfaceLost`] is returned from
@@ -219,7 +228,7 @@ impl WgpuRenderer {
 
     // ── Internal helpers ───────────────────────────────────────────────────────
 
-    fn texture_matches(&self, frame: &DecodedFrame) -> bool {
+    pub(crate) fn texture_matches(&self, frame: &DecodedFrame) -> bool {
         match (&self.texture_cache, &frame.format) {
             (Some(TextureCache::Bgra { width, height, .. }), PixelFormat::Bgra8)
             | (Some(TextureCache::Nv12 { width, height, .. }), PixelFormat::Nv12) => {
@@ -379,7 +388,16 @@ impl WgpuRenderer {
         );
     }
 
-    fn upload_frame(&self, frame: &DecodedFrame) {
+    /// Recreates the texture cache for the given frame dimensions and format.
+    #[cfg(feature = "gui")]
+    pub(crate) fn recreate_texture_cache(&mut self, frame: &DecodedFrame) {
+        self.texture_cache = Some(match frame.format {
+            PixelFormat::Bgra8 => self.create_bgra_cache(frame.width, frame.height),
+            PixelFormat::Nv12 => self.create_nv12_cache(frame.width, frame.height),
+        });
+    }
+
+    pub(crate) fn upload_frame(&self, frame: &DecodedFrame) {
         match (&self.texture_cache, &frame.format) {
             (Some(TextureCache::Bgra { texture, .. }), PixelFormat::Bgra8) => {
                 self.upload_bgra(frame, texture);

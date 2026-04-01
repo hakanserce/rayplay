@@ -9,7 +9,7 @@ use crate::{
 pub fn show(ctx: &egui::Context, app: &mut UiApp) {
     // Full-screen black background for video
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(egui::Color32::from_gray(26)))
+        .frame(egui::Frame::none().fill(egui::Color32::from_gray(26)))
         .show(ctx, |ui| {
             // Video area placeholder
             let video_rect = ui.available_rect_before_wrap();
@@ -136,18 +136,17 @@ fn show_stream_menu(ui: &mut egui::Ui, app: &mut UiApp) {
     // Semi-transparent background
     ui.painter().rect_filled(
         menu_rect,
-        egui::CornerRadius::same(10),
+        egui::Rounding::same(10.0),
         egui::Color32::from_rgba_premultiplied(30, 30, 30, 235),
     );
 
     ui.painter().rect_stroke(
         menu_rect,
-        egui::CornerRadius::same(10),
+        egui::Rounding::same(10.0),
         egui::Stroke::new(
             1.0,
             egui::Color32::from_rgba_premultiplied(255, 255, 255, 38),
         ),
-        egui::StrokeKind::Middle,
     );
 
     let mut menu_ui = ui.new_child(

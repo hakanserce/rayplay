@@ -18,10 +18,10 @@ pub fn show(ctx: &egui::Context, app: &mut UiApp) {
         ui.add_space(50.0);
 
         ui.vertical_centered(|ui| {
-            egui::Frame::new()
+            egui::Frame::none()
                 .fill(egui::Color32::WHITE)
                 .stroke(egui::Stroke::new(2.0, egui::Color32::from_gray(221)))
-                .corner_radius(8)
+                .rounding(8.0)
                 .inner_margin(30.0)
                 .show(ui, |ui| {
                     ui.set_max_width(400.0);

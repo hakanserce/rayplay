@@ -43,10 +43,10 @@ pub fn show(ctx: &egui::Context, app: &mut UiApp) {
 
 /// Shows the video settings section.
 fn show_video_settings_section(ui: &mut egui::Ui, app: &mut UiApp) {
-    egui::Frame::new()
+    egui::Frame::none()
         .fill(egui::Color32::WHITE)
         .stroke(egui::Stroke::new(2.0, egui::Color32::from_gray(221)))
-        .corner_radius(8)
+        .rounding(8.0)
         .inner_margin(20.0)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("Video").size(18.0).strong());
@@ -120,10 +120,10 @@ fn show_video_settings_section(ui: &mut egui::Ui, app: &mut UiApp) {
 
 /// Shows the paired hosts section.
 fn show_paired_hosts_section(ui: &mut egui::Ui, app: &mut UiApp) {
-    egui::Frame::new()
+    egui::Frame::none()
         .fill(egui::Color32::WHITE)
         .stroke(egui::Stroke::new(2.0, egui::Color32::from_gray(221)))
-        .corner_radius(8)
+        .rounding(8.0)
         .inner_margin(20.0)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("Paired Hosts").size(18.0).strong());
@@ -188,10 +188,10 @@ fn show_paired_hosts_section(ui: &mut egui::Ui, app: &mut UiApp) {
 
 /// Shows the about section.
 fn show_about_section(ui: &mut egui::Ui) {
-    egui::Frame::new()
+    egui::Frame::none()
         .fill(egui::Color32::WHITE)
         .stroke(egui::Stroke::new(2.0, egui::Color32::from_gray(221)))
-        .corner_radius(8)
+        .rounding(8.0)
         .inner_margin(20.0)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("About").size(18.0).strong());

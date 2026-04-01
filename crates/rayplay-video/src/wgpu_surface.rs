@@ -143,4 +143,87 @@ impl WgpuRenderer {
         output.present();
         Ok(())
     }
+
+    /// Presents video frame + egui overlay in two render passes on the same
+    /// surface texture.
+    #[cfg(feature = "gui")]
+    pub(crate) fn present_to_surface_with_egui(
+        &mut self,
+        hw_bind_group: Option<&wgpu::BindGroup>,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        egui_primitives: &[egui::ClippedPrimitive],
+        egui_textures_delta: &egui::TexturesDelta,
+        screen_descriptor: &egui_wgpu::ScreenDescriptor,
+    ) -> Result<(), RenderError> {
+        let RendererOutput::Surface { surface, .. } = &self.output else {
+            return Ok(());
+        };
+        let output = surface
+            .get_current_texture()
+            .map_err(|e| surface_error_to_render_error(&e))?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Pass 1: video frame
+        let video_cmd = self.encode_frame(&view, hw_bind_group);
+
+        // Pass 2: egui overlay
+        for (id, image_delta) in &egui_textures_delta.set {
+            egui_renderer.update_texture(&self.device, &self.queue, *id, image_delta);
+        }
+
+        // Encode egui buffer updates (separate encoder to avoid lifetime issues)
+        let mut buf_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("egui_buffers"),
+            });
+        egui_renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut buf_encoder,
+            egui_primitives,
+            screen_descriptor,
+        );
+        let buf_cmd = buf_encoder.finish();
+
+        // Encode egui render pass — egui-wgpu 0.29 requires RenderPass<'static>,
+        // so we use forget_lifetime() to decouple from the encoder borrow.
+        let mut rp_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("egui_render"),
+            });
+        let rp = rp_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui_render_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+        // SAFETY: forget_lifetime decouples the borrow from the encoder so
+        // egui_renderer.render() can accept &mut RenderPass<'static>.
+        // The render pass is dropped before encoder.finish() below.
+        let mut rp_static = rp.forget_lifetime();
+        egui_renderer.render(&mut rp_static, egui_primitives, screen_descriptor);
+        drop(rp_static);
+        let rp_cmd = rp_encoder.finish();
+
+        self.queue.submit([video_cmd, buf_cmd, rp_cmd]);
+        output.present();
+
+        for id in &egui_textures_delta.free {
+            egui_renderer.free_texture(id);
+        }
+
+        Ok(())
+    }
 }

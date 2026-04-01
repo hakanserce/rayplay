@@ -76,7 +76,12 @@ fn main() -> Result<()> {
     });
 
     // Main thread: runs the winit event loop until the window is closed.
-    let render_result = RenderWindow::new("RayView", width, height).run(event_loop, frame_rx);
+    let render_result = RenderWindow::new("RayView", width, height).run(
+        event_loop,
+        frame_rx,
+        #[cfg(feature = "gui")]
+        None,
+    );
     if let Err(ref e) = render_result {
         tracing::error!(error = %e, "Render window error");
     }

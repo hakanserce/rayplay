@@ -111,6 +111,7 @@ impl RenderWindow {
         self,
         event_loop: EventLoop<()>,
         frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
+        #[cfg(feature = "gui")] ui_overlay: Option<Box<dyn crate::UiOverlay>>,
     ) -> Result<(), RenderError> {
         let mut app = AppState {
             title: self.title,
@@ -121,6 +122,12 @@ impl RenderWindow {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
 
         event_loop
@@ -146,6 +153,12 @@ struct AppState {
     pending_frame: Option<DecodedFrame>,
     /// Stores an error from `resumed` so `run` can surface it after exit.
     init_error: Option<RenderError>,
+    #[cfg(feature = "gui")]
+    ui_overlay: Option<Box<dyn crate::UiOverlay>>,
+    #[cfg(feature = "gui")]
+    egui_state: Option<egui_winit::State>,
+    #[cfg(feature = "gui")]
+    egui_renderer: Option<egui_wgpu::Renderer>,
 }
 
 impl AppState {
@@ -159,16 +172,82 @@ impl AppState {
     }
 
     fn render(&mut self) {
-        let (Some(renderer), Some(frame)) = (&mut self.renderer, self.pending_frame.take()) else {
+        let frame = self.pending_frame.take();
+
+        // When GUI is enabled, run egui pass (with or without a video frame).
+        #[cfg(feature = "gui")]
+        if self.ui_overlay.is_some() {
+            self.render_egui(frame.as_ref());
+            return;
+        }
+
+        // Non-GUI path: render video frame only.
+        let (Some(renderer), Some(frame)) = (&mut self.renderer, frame) else {
             return;
         };
         if let Err(RenderError::SurfaceLost) = renderer.present_frame(&frame)
             && let Some(window) = &self.window
         {
-            // Reconfigure the swap chain to the current window size.
-            // wgpu::Surface::configure returns () — if the device is lost,
-            // the next present_frame call will surface the error rather than
-            // this reconfigure step.
+            renderer.resize(window.inner_size());
+        }
+    }
+
+    /// Renders video frame (if any) plus egui overlay.
+    #[cfg(feature = "gui")]
+    fn render_egui(&mut self, frame: Option<&DecodedFrame>) {
+        let (Some(renderer), Some(egui_state), Some(egui_renderer), Some(overlay), Some(window)) = (
+            &mut self.renderer,
+            &mut self.egui_state,
+            &mut self.egui_renderer,
+            &mut self.ui_overlay,
+            &self.window,
+        ) else {
+            return;
+        };
+
+        // Upload video frame to GPU if present
+        #[allow(unused_mut)]
+        let mut hw_bind_group: Option<wgpu::BindGroup> = None;
+        if let Some(frame) = frame {
+            #[cfg(target_os = "macos")]
+            #[allow(clippy::collapsible_if)]
+            if frame.is_hardware_frame {
+                if let Some(ref handle) = frame.iosurface {
+                    hw_bind_group =
+                        renderer.import_iosurface_textures(handle, frame.width, frame.height);
+                }
+            }
+            if hw_bind_group.is_none() && !frame.is_hardware_frame {
+                if !renderer.texture_matches(frame) {
+                    renderer.recreate_texture_cache(frame);
+                }
+                renderer.upload_frame(frame);
+            }
+        }
+
+        // Run egui
+        let raw_input = egui_state.take_egui_input(window);
+        let egui_ctx = egui_state.egui_ctx().clone();
+        let full_output = egui_ctx.run(raw_input, |ctx| {
+            overlay.update(ctx);
+        });
+        egui_state.handle_platform_output(window, full_output.platform_output);
+
+        let primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [window.inner_size().width, window.inner_size().height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
+        let result = renderer.present_to_surface_with_egui(
+            hw_bind_group.as_ref(),
+            egui_renderer,
+            &primitives,
+            &full_output.textures_delta,
+            &screen_descriptor,
+        );
+
+        if let Err(RenderError::SurfaceLost) = result {
             renderer.resize(window.inner_size());
         }
     }
@@ -194,6 +273,25 @@ impl ApplicationHandler for AppState {
 
         match pollster::block_on(WgpuRenderer::new(Arc::clone(&window))) {
             Ok(renderer) => {
+                #[cfg(feature = "gui")]
+                if self.ui_overlay.is_some() {
+                    let egui_ctx = egui::Context::default();
+                    self.egui_state = Some(egui_winit::State::new(
+                        egui_ctx,
+                        egui::ViewportId::ROOT,
+                        &window,
+                        None,
+                        None,
+                        None,
+                    ));
+                    self.egui_renderer = Some(egui_wgpu::Renderer::new(
+                        &renderer.device,
+                        renderer.surface_format(),
+                        None,
+                        1,
+                        false,
+                    ));
+                }
                 self.window = Some(window);
                 self.renderer = Some(renderer);
             }
@@ -210,6 +308,21 @@ impl ApplicationHandler for AppState {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Let egui process the event first when the GUI feature is enabled.
+        #[cfg(feature = "gui")]
+        if let (Some(egui_state), Some(window)) = (&mut self.egui_state, &self.window) {
+            let response = egui_state.on_window_event(window, &event);
+            if response.consumed {
+                if response.repaint {
+                    window.request_redraw();
+                }
+                return;
+            }
+            if response.repaint {
+                window.request_redraw();
+            }
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
@@ -236,9 +349,18 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Sleep until an OS event or a `FrameNotifier::notify()` call wakes us.
-        // This replaces the previous `ControlFlow::Poll` busy-loop that caused
-        // ~82 % CPU usage on Apple Silicon.
+        // When egui UI is active (not streaming or menu open), request continuous
+        // redraws for responsive UI. Otherwise wait for frame notifications.
+        #[cfg(feature = "gui")]
+        #[allow(clippy::collapsible_if)]
+        if let Some(overlay) = &self.ui_overlay {
+            if overlay.wants_input() {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return;
+            }
+        }
         event_loop.set_control_flow(ControlFlow::Wait);
     }
 
@@ -311,6 +433,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
         // Must not panic when renderer and frame are both absent.
         app.render();
@@ -328,6 +456,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
         app.render(); // renderer = None → early return
         assert!(app.pending_frame.is_none());
@@ -345,6 +479,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
         // Must not panic when window is absent.
         app.toggle_fullscreen();
@@ -364,6 +504,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 0);
@@ -389,6 +535,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
         // Channel empty: pending_frame stays None.
         if let Ok(f) = app.frame_rx.try_recv() {
@@ -413,6 +565,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
 
         // Send three frames with distinct timestamps
@@ -445,6 +603,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
 
         // Fill channel with 4 frames
@@ -477,6 +641,12 @@ mod tests {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            #[cfg(feature = "gui")]
+            ui_overlay: None,
+            #[cfg(feature = "gui")]
+            egui_state: None,
+            #[cfg(feature = "gui")]
+            egui_renderer: None,
         };
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 42);

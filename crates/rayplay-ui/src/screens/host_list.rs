@@ -60,7 +60,6 @@ pub fn show(ctx: &egui::Context, app: &mut UiApp) {
                         8.0,
                         egui::Color32::WHITE,
                         egui::Stroke::new(2.0, visuals.bg_stroke.color),
-                        egui::StrokeKind::Middle,
                     );
 
                     // Host content
@@ -118,7 +117,6 @@ pub fn show(ctx: &egui::Context, app: &mut UiApp) {
                     8.0,
                     egui::Color32::WHITE,
                     egui::Stroke::new(2.0, add_visuals.bg_stroke.color),
-                    egui::StrokeKind::Middle,
                 );
 
                 // Draw + symbol
@@ -152,7 +150,7 @@ fn show_badge(ui: &mut egui::Ui, badge: HostBadge) {
     let (rect, _) = ui.allocate_exact_size(badge_size, egui::Sense::hover());
 
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(6), color);
+        .rect_filled(rect, egui::Rounding::same(6.0), color);
 
     ui.painter().galley(
         rect.center() - text_size / 2.0,

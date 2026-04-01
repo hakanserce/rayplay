@@ -34,6 +34,7 @@ rayplay-video                = { path = "../rayplay-video" }
 ## Forward hw-codec-tests to rayplay-video for integration tests that need
 ## hardware encoders/decoders (VtDecoder on macOS, NvencEncoder on Windows).
 hw-codec-tests = ["rayplay-video/hw-codec-tests"]
+gui = ["rayplay-video/gui"]
 
 [[bench]]
 name    = "e2e_latency"

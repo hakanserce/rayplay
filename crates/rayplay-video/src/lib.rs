@@ -81,6 +81,20 @@ pub use render_window::RenderWindow;
 pub use renderer::{RenderError, Renderer};
 pub use wgpu_renderer::WgpuRenderer;
 
+/// Trait for UI overlays rendered on top of the video stream.
+///
+/// Implement this in `rayplay-ui` and pass to [`RenderWindow::run`].
+/// When `wants_input()` returns `true`, keyboard/mouse events are consumed
+/// by the UI instead of being passed to the input relay.
+#[cfg(feature = "gui")]
+pub trait UiOverlay: Send {
+    /// Called each frame with the egui context to build the UI.
+    fn update(&mut self, ctx: &egui::Context);
+
+    /// Whether the UI wants to consume input events this frame.
+    fn wants_input(&self) -> bool;
+}
+
 #[cfg(target_os = "windows")]
 pub use nvenc::NvencEncoder;
 
