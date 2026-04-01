@@ -75,8 +75,18 @@ fn main() -> Result<()> {
         });
     });
 
-    // Main thread: runs the winit event loop until the window is closed.
-    let render_result = RenderWindow::new("RayView", width, height).run(event_loop, frame_rx);
+    // Main thread: create UI overlay (if gui feature enabled) and run the
+    // winit event loop until the window is closed.
+    let render_result = {
+        let (_ui_event_tx, ui_event_rx) = crossbeam_channel::unbounded();
+        let (ui_action_tx, _ui_action_rx) = crossbeam_channel::unbounded();
+        let ui_app = rayplay_ui::UiApp::new(ui_event_rx, ui_action_tx);
+        RenderWindow::new("RayView", width, height).run(
+            event_loop,
+            frame_rx,
+            Some(Box::new(ui_app)),
+        )
+    };
     if let Err(ref e) = render_result {
         tracing::error!(error = %e, "Render window error");
     }

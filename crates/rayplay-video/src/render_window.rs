@@ -77,10 +77,6 @@ impl RenderWindow {
     /// Creates the `winit` event loop and returns it together with a proxy
     /// that can wake the loop from another thread.
     ///
-    /// Call this on the main thread before spawning background threads, then
-    /// pass the proxy (or a [`FrameNotifier`] wrapping it) to the producer
-    /// side and hand the event loop to [`run`](Self::run).
-    ///
     /// # Errors
     ///
     /// - [`RenderError::Failed`] — event loop creation failed.
@@ -94,23 +90,18 @@ impl RenderWindow {
         Ok((event_loop, proxy))
     }
 
-    /// Starts the `winit` event loop and renders frames from `frame_rx`.
+    /// Starts the `winit` event loop with an optional egui UI overlay.
     ///
-    /// The event loop uses [`ControlFlow::Wait`] and relies on the producer
-    /// thread calling [`EventLoopProxy::send_event`] (via [`FrameNotifier`])
-    /// to wake it when a new frame is available.
-    ///
-    /// Blocks the calling thread (must be the main thread on macOS).  Returns
-    /// when the user closes the window or an unrecoverable error occurs.
+    /// Pass `None` as `ui_overlay` for video-only rendering.
     ///
     /// # Errors
     ///
-    /// - [`RenderError::Failed`] — window creation failed or GPU adapter /
-    ///   device initialisation failed.
+    /// - [`RenderError::Failed`] — window creation or GPU init failed.
     pub fn run(
         self,
         event_loop: EventLoop<()>,
         frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
+        ui_overlay: Option<Box<dyn crate::UiOverlay>>,
     ) -> Result<(), RenderError> {
         let mut app = AppState {
             title: self.title,
@@ -121,6 +112,9 @@ impl RenderWindow {
             renderer: None,
             pending_frame: None,
             init_error: None,
+            ui_overlay,
+            egui_state: None,
+            egui_renderer: None,
         };
 
         event_loop
@@ -142,10 +136,11 @@ struct AppState {
     frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
     window: Option<Arc<Window>>,
     renderer: Option<WgpuRenderer>,
-    /// Most recently received frame, waiting for the next `RedrawRequested`.
     pending_frame: Option<DecodedFrame>,
-    /// Stores an error from `resumed` so `run` can surface it after exit.
     init_error: Option<RenderError>,
+    ui_overlay: Option<Box<dyn crate::UiOverlay>>,
+    egui_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_wgpu::Renderer>,
 }
 
 impl AppState {
@@ -159,16 +154,80 @@ impl AppState {
     }
 
     fn render(&mut self) {
-        let (Some(renderer), Some(frame)) = (&mut self.renderer, self.pending_frame.take()) else {
+        let frame = self.pending_frame.take();
+
+        // When an overlay is present, always use the egui render path.
+        if self.ui_overlay.is_some() {
+            self.render_egui(frame.as_ref());
+            return;
+        }
+
+        // No overlay: render video frame only.
+        let (Some(renderer), Some(frame)) = (&mut self.renderer, frame) else {
             return;
         };
         if let Err(RenderError::SurfaceLost) = renderer.present_frame(&frame)
             && let Some(window) = &self.window
         {
-            // Reconfigure the swap chain to the current window size.
-            // wgpu::Surface::configure returns () — if the device is lost,
-            // the next present_frame call will surface the error rather than
-            // this reconfigure step.
+            renderer.resize(window.inner_size());
+        }
+    }
+
+    /// Renders video frame (if any) plus egui overlay.
+    fn render_egui(&mut self, frame: Option<&DecodedFrame>) {
+        let (Some(renderer), Some(egui_state), Some(egui_renderer), Some(overlay), Some(window)) = (
+            &mut self.renderer,
+            &mut self.egui_state,
+            &mut self.egui_renderer,
+            &mut self.ui_overlay,
+            &self.window,
+        ) else {
+            return;
+        };
+
+        // Upload video frame to GPU if present.
+        #[allow(unused_mut)]
+        let mut hw_bind_group: Option<wgpu::BindGroup> = None;
+        if let Some(frame) = frame {
+            #[cfg(target_os = "macos")]
+            #[allow(clippy::collapsible_if)]
+            if frame.is_hardware_frame {
+                if let Some(ref handle) = frame.iosurface {
+                    hw_bind_group =
+                        renderer.import_iosurface_textures(handle, frame.width, frame.height);
+                }
+            }
+            if hw_bind_group.is_none() && !frame.is_hardware_frame {
+                if !renderer.texture_matches(frame) {
+                    renderer.recreate_texture_cache(frame);
+                }
+                renderer.upload_frame(frame);
+            }
+        }
+
+        // Run egui frame.
+        let raw_input = egui_state.take_egui_input(window);
+        let egui_ctx = egui_state.egui_ctx().clone();
+        let full_output = egui_ctx.run(raw_input, |ctx| {
+            overlay.update(ctx);
+        });
+        egui_state.handle_platform_output(window, full_output.platform_output);
+
+        let primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [window.inner_size().width, window.inner_size().height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
+        let result = renderer.present_to_surface_with_egui(
+            hw_bind_group.as_ref(),
+            egui_renderer,
+            &primitives,
+            &full_output.textures_delta,
+            &screen_descriptor,
+        );
+
+        if let Err(RenderError::SurfaceLost) = result {
             renderer.resize(window.inner_size());
         }
     }
@@ -194,6 +253,24 @@ impl ApplicationHandler for AppState {
 
         match pollster::block_on(WgpuRenderer::new(Arc::clone(&window))) {
             Ok(renderer) => {
+                if self.ui_overlay.is_some() {
+                    let egui_ctx = egui::Context::default();
+                    self.egui_state = Some(egui_winit::State::new(
+                        egui_ctx,
+                        egui::ViewportId::ROOT,
+                        &window,
+                        None,
+                        None,
+                        None,
+                    ));
+                    self.egui_renderer = Some(egui_wgpu::Renderer::new(
+                        &renderer.device,
+                        renderer.surface_format(),
+                        None,
+                        1,
+                        false,
+                    ));
+                }
                 self.window = Some(window);
                 self.renderer = Some(renderer);
             }
@@ -210,6 +287,20 @@ impl ApplicationHandler for AppState {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Let egui process the event first.
+        if let (Some(egui_state), Some(window)) = (&mut self.egui_state, &self.window) {
+            let response = egui_state.on_window_event(window, &event);
+            if response.consumed {
+                if response.repaint {
+                    window.request_redraw();
+                }
+                return;
+            }
+            if response.repaint {
+                window.request_redraw();
+            }
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
@@ -236,15 +327,20 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Sleep until an OS event or a `FrameNotifier::notify()` call wakes us.
-        // This replaces the previous `ControlFlow::Poll` busy-loop that caused
-        // ~82 % CPU usage on Apple Silicon.
+        // When egui UI wants input, request continuous redraws for responsive UI.
+        // Otherwise wait for frame notifications.
+        if let Some(overlay) = &self.ui_overlay
+            && overlay.wants_input()
+        {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
         event_loop.set_control_flow(ControlFlow::Wait);
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
-        // Woken by `FrameNotifier` — drain to the latest frame, skipping stale
-        // intermediate frames, and request a redraw for the most recent one.
         while let Ok(frame) = self.frame_rx.try_recv() {
             self.pending_frame = Some(frame);
         }
@@ -261,6 +357,22 @@ impl ApplicationHandler for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_app_state(rx: crossbeam_channel::Receiver<DecodedFrame>) -> AppState {
+        AppState {
+            title: "t".to_string(),
+            width: 1,
+            height: 1,
+            frame_rx: rx,
+            window: None,
+            renderer: None,
+            pending_frame: None,
+            init_error: None,
+            ui_overlay: None,
+            egui_state: None,
+            egui_renderer: None,
+        }
+    }
 
     // ── RenderWindow construction ──────────────────────────────────────────────
 
@@ -302,51 +414,22 @@ mod tests {
     #[test]
     fn test_app_state_render_no_ops_without_renderer() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
-        // Must not panic when renderer and frame are both absent.
+        let mut app = test_app_state(rx);
         app.render();
     }
 
     #[test]
     fn test_app_state_render_no_ops_without_pending_frame() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
-        app.render(); // renderer = None → early return
+        let mut app = test_app_state(rx);
+        app.render();
         assert!(app.pending_frame.is_none());
     }
 
     #[test]
     fn test_app_state_toggle_fullscreen_no_ops_without_window() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
-        // Must not panic when window is absent.
+        let app = test_app_state(rx);
         app.toggle_fullscreen();
     }
 
@@ -355,21 +438,11 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
+        let mut app = test_app_state(rx);
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 0);
         tx.send(frame).unwrap();
 
-        // Simulate about_to_wait without event loop: just call try_recv directly.
         if let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
@@ -380,17 +453,7 @@ mod tests {
     #[test]
     fn test_app_state_about_to_wait_empty_channel_leaves_no_frame() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
-        // Channel empty: pending_frame stays None.
+        let mut app = test_app_state(rx);
         if let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
@@ -404,29 +467,17 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
+        let mut app = test_app_state(rx);
 
-        // Send three frames with distinct timestamps
         for ts in [100, 200, 300] {
             let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
             tx.send(frame).unwrap();
         }
 
-        // Drain loop: simulate the while-let in about_to_wait
         while let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
 
-        // Only the latest frame (timestamp 300) should remain
         let pending = app.pending_frame.unwrap();
         assert_eq!(pending.timestamp_us, 300);
     }
@@ -436,18 +487,8 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
+        let mut app = test_app_state(rx);
 
-        // Fill channel with 4 frames
         for ts in [10, 20, 30, 40] {
             let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
             tx.send(frame).unwrap();
@@ -457,9 +498,7 @@ mod tests {
             app.pending_frame = Some(f);
         }
 
-        // Channel should be fully drained
         assert!(app.frame_rx.try_recv().is_err());
-        // Latest frame is kept
         assert_eq!(app.pending_frame.unwrap().timestamp_us, 40);
     }
 
@@ -468,16 +507,7 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(2);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-        };
+        let mut app = test_app_state(rx);
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 42);
         tx.send(frame).unwrap();

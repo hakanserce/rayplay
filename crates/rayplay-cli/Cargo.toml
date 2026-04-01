@@ -29,6 +29,7 @@ tracing-subscriber.workspace = true
 rayplay-core                 = { path = "../rayplay-core" }
 rayplay-network              = { path = "../rayplay-network" }
 rayplay-video                = { path = "../rayplay-video" }
+rayplay-ui                   = { path = "../rayplay-ui" }
 
 [features]
 ## Forward hw-codec-tests to rayplay-video for integration tests that need
