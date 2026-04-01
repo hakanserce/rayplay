@@ -17,6 +17,7 @@ crossbeam-channel.workspace = true
 egui.workspace = true
 rayplay-core = { path = "../rayplay-core" }
 rayplay-network = { path = "../rayplay-network" }
+rayplay-video = { path = "../rayplay-video" }
 chrono.workspace = true
 tracing.workspace = true
 

@@ -389,7 +389,6 @@ impl WgpuRenderer {
     }
 
     /// Recreates the texture cache for the given frame dimensions and format.
-    #[cfg(feature = "gui")]
     pub(crate) fn recreate_texture_cache(&mut self, frame: &DecodedFrame) {
         self.texture_cache = Some(match frame.format {
             PixelFormat::Bgra8 => self.create_bgra_cache(frame.width, frame.height),

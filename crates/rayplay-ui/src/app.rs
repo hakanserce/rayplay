@@ -328,6 +328,16 @@ impl UiApp {
     }
 }
 
+impl rayplay_video::UiOverlay for UiApp {
+    fn update(&mut self, ctx: &egui::Context) {
+        self.update(ctx);
+    }
+
+    fn wants_input(&self) -> bool {
+        self.wants_input()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

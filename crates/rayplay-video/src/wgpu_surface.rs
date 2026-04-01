@@ -146,7 +146,6 @@ impl WgpuRenderer {
 
     /// Presents video frame + egui overlay in two render passes on the same
     /// surface texture.
-    #[cfg(feature = "gui")]
     pub(crate) fn present_to_surface_with_egui(
         &mut self,
         hw_bind_group: Option<&wgpu::BindGroup>,

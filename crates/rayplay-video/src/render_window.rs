@@ -77,10 +77,6 @@ impl RenderWindow {
     /// Creates the `winit` event loop and returns it together with a proxy
     /// that can wake the loop from another thread.
     ///
-    /// Call this on the main thread before spawning background threads, then
-    /// pass the proxy (or a [`FrameNotifier`] wrapping it) to the producer
-    /// side and hand the event loop to [`run`](Self::run).
-    ///
     /// # Errors
     ///
     /// - [`RenderError::Failed`] — event loop creation failed.
@@ -94,24 +90,18 @@ impl RenderWindow {
         Ok((event_loop, proxy))
     }
 
-    /// Starts the `winit` event loop and renders frames from `frame_rx`.
+    /// Starts the `winit` event loop with an optional egui UI overlay.
     ///
-    /// The event loop uses [`ControlFlow::Wait`] and relies on the producer
-    /// thread calling [`EventLoopProxy::send_event`] (via [`FrameNotifier`])
-    /// to wake it when a new frame is available.
-    ///
-    /// Blocks the calling thread (must be the main thread on macOS).  Returns
-    /// when the user closes the window or an unrecoverable error occurs.
+    /// Pass `None` as `ui_overlay` for video-only rendering.
     ///
     /// # Errors
     ///
-    /// - [`RenderError::Failed`] — window creation failed or GPU adapter /
-    ///   device initialisation failed.
+    /// - [`RenderError::Failed`] — window creation or GPU init failed.
     pub fn run(
         self,
         event_loop: EventLoop<()>,
         frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
-        #[cfg(feature = "gui")] ui_overlay: Option<Box<dyn crate::UiOverlay>>,
+        ui_overlay: Option<Box<dyn crate::UiOverlay>>,
     ) -> Result<(), RenderError> {
         let mut app = AppState {
             title: self.title,
@@ -122,11 +112,8 @@ impl RenderWindow {
             renderer: None,
             pending_frame: None,
             init_error: None,
-            #[cfg(feature = "gui")]
             ui_overlay,
-            #[cfg(feature = "gui")]
             egui_state: None,
-            #[cfg(feature = "gui")]
             egui_renderer: None,
         };
 
@@ -149,15 +136,10 @@ struct AppState {
     frame_rx: crossbeam_channel::Receiver<DecodedFrame>,
     window: Option<Arc<Window>>,
     renderer: Option<WgpuRenderer>,
-    /// Most recently received frame, waiting for the next `RedrawRequested`.
     pending_frame: Option<DecodedFrame>,
-    /// Stores an error from `resumed` so `run` can surface it after exit.
     init_error: Option<RenderError>,
-    #[cfg(feature = "gui")]
     ui_overlay: Option<Box<dyn crate::UiOverlay>>,
-    #[cfg(feature = "gui")]
     egui_state: Option<egui_winit::State>,
-    #[cfg(feature = "gui")]
     egui_renderer: Option<egui_wgpu::Renderer>,
 }
 
@@ -174,14 +156,13 @@ impl AppState {
     fn render(&mut self) {
         let frame = self.pending_frame.take();
 
-        // When GUI is enabled, run egui pass (with or without a video frame).
-        #[cfg(feature = "gui")]
+        // When an overlay is present, always use the egui render path.
         if self.ui_overlay.is_some() {
             self.render_egui(frame.as_ref());
             return;
         }
 
-        // Non-GUI path: render video frame only.
+        // No overlay: render video frame only.
         let (Some(renderer), Some(frame)) = (&mut self.renderer, frame) else {
             return;
         };
@@ -193,7 +174,6 @@ impl AppState {
     }
 
     /// Renders video frame (if any) plus egui overlay.
-    #[cfg(feature = "gui")]
     fn render_egui(&mut self, frame: Option<&DecodedFrame>) {
         let (Some(renderer), Some(egui_state), Some(egui_renderer), Some(overlay), Some(window)) = (
             &mut self.renderer,
@@ -205,7 +185,7 @@ impl AppState {
             return;
         };
 
-        // Upload video frame to GPU if present
+        // Upload video frame to GPU if present.
         #[allow(unused_mut)]
         let mut hw_bind_group: Option<wgpu::BindGroup> = None;
         if let Some(frame) = frame {
@@ -225,7 +205,7 @@ impl AppState {
             }
         }
 
-        // Run egui
+        // Run egui frame.
         let raw_input = egui_state.take_egui_input(window);
         let egui_ctx = egui_state.egui_ctx().clone();
         let full_output = egui_ctx.run(raw_input, |ctx| {
@@ -273,7 +253,6 @@ impl ApplicationHandler for AppState {
 
         match pollster::block_on(WgpuRenderer::new(Arc::clone(&window))) {
             Ok(renderer) => {
-                #[cfg(feature = "gui")]
                 if self.ui_overlay.is_some() {
                     let egui_ctx = egui::Context::default();
                     self.egui_state = Some(egui_winit::State::new(
@@ -308,8 +287,7 @@ impl ApplicationHandler for AppState {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        // Let egui process the event first when the GUI feature is enabled.
-        #[cfg(feature = "gui")]
+        // Let egui process the event first.
         if let (Some(egui_state), Some(window)) = (&mut self.egui_state, &self.window) {
             let response = egui_state.on_window_event(window, &event);
             if response.consumed {
@@ -349,24 +327,20 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // When egui UI is active (not streaming or menu open), request continuous
-        // redraws for responsive UI. Otherwise wait for frame notifications.
-        #[cfg(feature = "gui")]
-        #[allow(clippy::collapsible_if)]
-        if let Some(overlay) = &self.ui_overlay {
-            if overlay.wants_input() {
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-                return;
+        // When egui UI wants input, request continuous redraws for responsive UI.
+        // Otherwise wait for frame notifications.
+        if let Some(overlay) = &self.ui_overlay
+            && overlay.wants_input()
+        {
+            if let Some(window) = &self.window {
+                window.request_redraw();
             }
+            return;
         }
         event_loop.set_control_flow(ControlFlow::Wait);
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
-        // Woken by `FrameNotifier` — drain to the latest frame, skipping stale
-        // intermediate frames, and request a redraw for the most recent one.
         while let Ok(frame) = self.frame_rx.try_recv() {
             self.pending_frame = Some(frame);
         }
@@ -383,6 +357,22 @@ impl ApplicationHandler for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_app_state(rx: crossbeam_channel::Receiver<DecodedFrame>) -> AppState {
+        AppState {
+            title: "t".to_string(),
+            width: 1,
+            height: 1,
+            frame_rx: rx,
+            window: None,
+            renderer: None,
+            pending_frame: None,
+            init_error: None,
+            ui_overlay: None,
+            egui_state: None,
+            egui_renderer: None,
+        }
+    }
 
     // ── RenderWindow construction ──────────────────────────────────────────────
 
@@ -424,69 +414,22 @@ mod tests {
     #[test]
     fn test_app_state_render_no_ops_without_renderer() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
-        // Must not panic when renderer and frame are both absent.
+        let mut app = test_app_state(rx);
         app.render();
     }
 
     #[test]
     fn test_app_state_render_no_ops_without_pending_frame() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
-        app.render(); // renderer = None → early return
+        let mut app = test_app_state(rx);
+        app.render();
         assert!(app.pending_frame.is_none());
     }
 
     #[test]
     fn test_app_state_toggle_fullscreen_no_ops_without_window() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
-        // Must not panic when window is absent.
+        let app = test_app_state(rx);
         app.toggle_fullscreen();
     }
 
@@ -495,27 +438,11 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
+        let mut app = test_app_state(rx);
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 0);
         tx.send(frame).unwrap();
 
-        // Simulate about_to_wait without event loop: just call try_recv directly.
         if let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
@@ -526,23 +453,7 @@ mod tests {
     #[test]
     fn test_app_state_about_to_wait_empty_channel_leaves_no_frame() {
         let (_tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(1);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
-        // Channel empty: pending_frame stays None.
+        let mut app = test_app_state(rx);
         if let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
@@ -556,35 +467,17 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
+        let mut app = test_app_state(rx);
 
-        // Send three frames with distinct timestamps
         for ts in [100, 200, 300] {
             let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
             tx.send(frame).unwrap();
         }
 
-        // Drain loop: simulate the while-let in about_to_wait
         while let Ok(f) = app.frame_rx.try_recv() {
             app.pending_frame = Some(f);
         }
 
-        // Only the latest frame (timestamp 300) should remain
         let pending = app.pending_frame.unwrap();
         assert_eq!(pending.timestamp_us, 300);
     }
@@ -594,24 +487,8 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(4);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
+        let mut app = test_app_state(rx);
 
-        // Fill channel with 4 frames
         for ts in [10, 20, 30, 40] {
             let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, ts);
             tx.send(frame).unwrap();
@@ -621,9 +498,7 @@ mod tests {
             app.pending_frame = Some(f);
         }
 
-        // Channel should be fully drained
         assert!(app.frame_rx.try_recv().is_err());
-        // Latest frame is kept
         assert_eq!(app.pending_frame.unwrap().timestamp_us, 40);
     }
 
@@ -632,22 +507,7 @@ mod tests {
         use crate::{DecodedFrame, PixelFormat};
 
         let (tx, rx) = crossbeam_channel::bounded::<DecodedFrame>(2);
-        let mut app = AppState {
-            title: "t".to_string(),
-            width: 1,
-            height: 1,
-            frame_rx: rx,
-            window: None,
-            renderer: None,
-            pending_frame: None,
-            init_error: None,
-            #[cfg(feature = "gui")]
-            ui_overlay: None,
-            #[cfg(feature = "gui")]
-            egui_state: None,
-            #[cfg(feature = "gui")]
-            egui_renderer: None,
-        };
+        let mut app = test_app_state(rx);
 
         let frame = DecodedFrame::new_cpu(vec![0u8; 4], 1, 1, 4, PixelFormat::Bgra8, 42);
         tx.send(frame).unwrap();

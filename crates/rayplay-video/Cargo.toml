@@ -20,9 +20,9 @@ wgpu.workspace              = true
 crossbeam-channel.workspace = true
 pollster.workspace          = true
 rayplay-core                = { path = "../rayplay-core" }
-egui                        = { workspace = true, optional = true }
-egui-winit                  = { workspace = true, optional = true }
-egui-wgpu                   = { workspace = true, optional = true }
+egui.workspace              = true
+egui-winit.workspace        = true
+egui-wgpu.workspace         = true
 
 # Optional fallback dependencies
 scrap = { version = "0.5", optional = true }
@@ -64,9 +64,6 @@ fallback = ["dep:scrap", "dep:openh264"]
 ## Enable FFmpeg-based fallback implementations for advanced codec support.
 ## Opt-in due to FFmpeg's complex build requirements.
 ffmpeg-fallback = ["dep:ffmpeg-next", "dep:libc"]
-
-## Enable egui-based GUI overlay on the render window.
-gui = ["dep:egui", "dep:egui-winit", "dep:egui-wgpu"]
 
 # The `objc` crate's `msg_send!` macro checks `cfg(feature = "cargo-clippy")`,
 # which is not a known feature of this crate. Tell check-cfg to expect it.

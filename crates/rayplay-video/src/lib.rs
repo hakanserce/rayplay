@@ -86,7 +86,6 @@ pub use wgpu_renderer::WgpuRenderer;
 /// Implement this in `rayplay-ui` and pass to [`RenderWindow::run`].
 /// When `wants_input()` returns `true`, keyboard/mouse events are consumed
 /// by the UI instead of being passed to the input relay.
-#[cfg(feature = "gui")]
 pub trait UiOverlay: Send {
     /// Called each frame with the egui context to build the UI.
     fn update(&mut self, ctx: &egui::Context);
