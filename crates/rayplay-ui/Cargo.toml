@@ -1,0 +1,24 @@
+[package]
+name = "rayplay-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "GUI components and UI state management for RayView client"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+crossbeam-channel.workspace = true
+egui.workspace = true
+rayplay-core = { path = "../rayplay-core" }
+rayplay-network = { path = "../rayplay-network" }
+chrono.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
